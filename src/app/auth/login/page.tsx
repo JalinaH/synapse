@@ -1,42 +1,94 @@
+"use client";
+
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { useRouter } from "next/navigation";
+import { Brain, Sun, Moon } from "lucide-react";
+import { useTheme } from "@/components/theme-provider";
+import { Space_Grotesk } from "next/font/google";
 
-export default async function LoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ message?: string }>;
-}) {
-  const { message } = await searchParams;
+const grotesk = Space_Grotesk({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+});
 
-  const login = async () => {
-    "use server";
-    redirect("/");
+export default function LoginPage() {
+  const router = useRouter();
+  const { theme, toggleTheme } = useTheme();
+  const isDark = theme === "dark";
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    router.push("/dashboard");
   };
 
   return (
-    <div className="min-h-screen bg-linear-to-br from-gray-50 via-white to-gray-100 flex items-center justify-center px-6 py-12">
+    <div
+      className={`${
+        grotesk.className
+      } min-h-screen flex items-center justify-center px-6 py-12 transition-colors ${
+        isDark ? "bg-[#050505] text-gray-50" : "bg-gray-50 text-black"
+      }`}
+    >
+      {/* Theme Toggle */}
+      <button
+        type="button"
+        onClick={toggleTheme}
+        className={`fixed top-6 right-6 inline-flex h-10 w-10 items-center justify-center rounded-full border transition-colors ${
+          isDark
+            ? "border-neutral-700 bg-neutral-900 text-gray-200 hover:border-neutral-500"
+            : "border-gray-200 bg-white text-gray-700 hover:border-gray-400"
+        }`}
+        aria-label="Toggle theme"
+      >
+        {isDark ? <Sun size={18} /> : <Moon size={18} />}
+      </button>
+
       <div className="w-full max-w-md">
-        <div className="mb-6 text-center space-y-2">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-black text-white shadow-lg shadow-gray-200">
-            <span className="text-lg font-semibold">S</span>
+        <div className="mb-8 text-center space-y-3">
+          <div
+            className={`inline-flex h-14 w-14 items-center justify-center rounded-2xl shadow-lg transition-colors ${
+              isDark
+                ? "bg-white text-black shadow-black/30"
+                : "bg-black text-white shadow-gray-200"
+            }`}
+          >
+            <Brain size={24} />
           </div>
-          <h1 className="text-2xl font-semibold text-gray-900">Welcome back</h1>
-          <p className="text-sm text-gray-500">
+          <h1
+            className={`text-2xl font-semibold ${
+              isDark ? "text-gray-50" : "text-gray-900"
+            }`}
+          >
+            Welcome back
+          </h1>
+          <p className={isDark ? "text-gray-400" : "text-gray-500"}>
             Sign in to your Synapse workspace
           </p>
         </div>
 
-        <div className="rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-xl shadow-gray-200/60">
-          <form className="space-y-4" action={login}>
+        <div
+          className={`rounded-2xl border p-6 shadow-xl transition-colors ${
+            isDark
+              ? "bg-neutral-900/80 border-neutral-800 shadow-black/30"
+              : "bg-white/80 border-gray-100 shadow-gray-200/60"
+          }`}
+        >
+          <form className="space-y-4" onSubmit={handleLogin}>
             <div className="space-y-2">
               <label
-                className="text-sm font-medium text-gray-700"
+                className={`text-sm font-medium ${
+                  isDark ? "text-gray-300" : "text-gray-700"
+                }`}
                 htmlFor="email"
               >
                 Email
               </label>
               <input
-                className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 placeholder:text-gray-400 shadow-inner focus:border-gray-400 focus:outline-none"
+                className={`w-full rounded-xl border px-4 py-3 text-sm transition-colors outline-none ${
+                  isDark
+                    ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
+                    : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+                }`}
                 id="email"
                 name="email"
                 type="email"
@@ -47,13 +99,19 @@ export default async function LoginPage({
 
             <div className="space-y-2">
               <label
-                className="text-sm font-medium text-gray-700"
+                className={`text-sm font-medium ${
+                  isDark ? "text-gray-300" : "text-gray-700"
+                }`}
                 htmlFor="password"
               >
                 Password
               </label>
               <input
-                className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 placeholder:text-gray-400 shadow-inner focus:border-gray-400 focus:outline-none"
+                className={`w-full rounded-xl border px-4 py-3 text-sm transition-colors outline-none ${
+                  isDark
+                    ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
+                    : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+                }`}
                 id="password"
                 name="password"
                 type="password"
@@ -64,27 +122,31 @@ export default async function LoginPage({
 
             <button
               type="submit"
-              className="w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-gray-300/60 transition hover:bg-black"
+              className={`w-full rounded-xl px-4 py-3 text-sm font-semibold shadow-lg transition-all hover:scale-[1.02] ${
+                isDark
+                  ? "bg-white text-black hover:bg-gray-100 shadow-black/30"
+                  : "bg-black text-white hover:bg-gray-900 shadow-gray-300/60"
+              }`}
             >
               Sign In
             </button>
           </form>
 
-          <div className="mt-4 flex items-center justify-between text-sm text-gray-600">
+          <div
+            className={`mt-4 flex items-center justify-between text-sm ${
+              isDark ? "text-gray-400" : "text-gray-600"
+            }`}
+          >
             <span>Don&apos;t have an account?</span>
             <Link
               href="/auth/register"
-              className="font-semibold text-gray-900 hover:underline"
+              className={`font-semibold hover:underline ${
+                isDark ? "text-white" : "text-gray-900"
+              }`}
             >
               Create one
             </Link>
           </div>
-
-          {message && (
-            <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 text-center">
-              {message}
-            </p>
-          )}
         </div>
       </div>
     </div>

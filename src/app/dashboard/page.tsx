@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { addNote, searchNotes, signOut } from "@/app/actions";
+import { addNote, searchNotes } from "@/app/actions";
+import { useTheme } from "@/components/theme-provider";
+import { Plus, Search, Sparkles } from "lucide-react";
 
 interface Note {
   id: string;
@@ -12,6 +14,8 @@ interface Note {
 export default function Dashboard() {
   const [searchResults, setSearchResults] = useState<Note[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
 
   async function handleSearch(formData: FormData) {
     setIsSearching(true);
@@ -22,35 +26,50 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-10">
-      <div className="flex justify-between items-center mb-10">
-        <h1 className="text-3xl font-bold">Synapse 🧠</h1>
-        <form action={signOut}>
-          <button className="text-sm text-red-500 hover:underline">
-            Sign Out
-          </button>
-        </form>
-      </div>
-
+    <div className="max-w-4xl mx-auto px-6 py-10">
       {/* 1. Add Note Section */}
-      <div className="mb-12 p-6 bg-gray-50 rounded-xl border">
-        <h2 className="text-xl font-semibold mb-4">Add to Memory</h2>
+      <div
+        className={`mb-10 p-6 rounded-2xl border shadow-lg transition-colors ${
+          isDark
+            ? "bg-neutral-900/80 border-neutral-800 shadow-black/30"
+            : "bg-white/80 border-gray-100 shadow-gray-200/60"
+        }`}
+      >
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+            <Plus size={20} />
+          </div>
+          <h2
+            className={`text-xl font-semibold ${
+              isDark ? "text-gray-50" : "text-gray-900"
+            }`}
+          >
+            Add to Memory
+          </h2>
+        </div>
         <form
           action={async (formData) => {
             await addNote(formData);
             alert("Note saved to brain!");
-            // clear form here if you want
           }}
         >
           <textarea
             name="content"
-            className="w-full p-3 border rounded-md min-h-[100px] mb-3"
+            className={`w-full p-4 rounded-xl min-h-[120px] mb-4 border transition-colors resize-none ${
+              isDark
+                ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
+                : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+            } outline-none`}
             placeholder="What did you learn today?"
             required
           />
           <button
             type="submit"
-            className="bg-black text-white px-4 py-2 rounded-md hover:bg-gray-800"
+            className={`px-6 py-3 rounded-xl font-semibold transition-all hover:scale-[1.02] shadow-lg ${
+              isDark
+                ? "bg-white text-black hover:bg-gray-100 shadow-black/30"
+                : "bg-black text-white hover:bg-gray-900 shadow-gray-300/60"
+            }`}
           >
             Save Note
           </button>
@@ -58,17 +77,38 @@ export default function Dashboard() {
       </div>
 
       {/* 2. Search Section */}
-      <div className="mb-8">
-        <h2 className="text-xl font-semibold mb-4">Recall Memory</h2>
-        <form action={handleSearch} className="flex gap-2">
+      <div
+        className={`mb-10 p-6 rounded-2xl border shadow-lg transition-colors ${
+          isDark
+            ? "bg-neutral-900/80 border-neutral-800 shadow-black/30"
+            : "bg-white/80 border-gray-100 shadow-gray-200/60"
+        }`}
+      >
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center">
+            <Search size={20} />
+          </div>
+          <h2
+            className={`text-xl font-semibold ${
+              isDark ? "text-gray-50" : "text-gray-900"
+            }`}
+          >
+            Recall Memory
+          </h2>
+        </div>
+        <form action={handleSearch} className="flex gap-3">
           <input
             name="query"
-            className="flex-1 p-3 border rounded-md"
+            className={`flex-1 p-4 rounded-xl border transition-colors ${
+              isDark
+                ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
+                : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+            } outline-none`}
             placeholder="Ask your second brain..."
           />
           <button
             type="submit"
-            className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700"
+            className="px-6 py-3 rounded-xl font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/20"
           >
             {isSearching ? "Thinking..." : "Ask"}
           </button>
@@ -80,11 +120,20 @@ export default function Dashboard() {
         {searchResults.map((note) => (
           <div
             key={note.id}
-            className="p-4 border rounded-lg bg-white shadow-sm hover:shadow-md transition"
+            className={`p-5 rounded-2xl border shadow-md transition-all hover:scale-[1.01] ${
+              isDark
+                ? "bg-neutral-900/80 border-neutral-800 shadow-black/30 hover:border-neutral-700"
+                : "bg-white/80 border-gray-100 shadow-gray-200/60 hover:border-gray-200"
+            }`}
           >
-            <p className="text-gray-800">{note.content}</p>
-            <div className="mt-2 text-xs text-green-600 font-mono">
-              Similarity Match: {(note.similarity * 100).toFixed(1)}%
+            <p className={isDark ? "text-gray-200" : "text-gray-800"}>
+              {note.content}
+            </p>
+            <div className="mt-3 flex items-center gap-2">
+              <Sparkles size={14} className="text-emerald-500" />
+              <span className="text-xs text-emerald-500 font-mono">
+                {(note.similarity * 100).toFixed(1)}% match
+              </span>
             </div>
           </div>
         ))}

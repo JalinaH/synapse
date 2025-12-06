@@ -91,3 +91,57 @@ export async function updateNote(formData: FormData) {
   // 3. Revalidate the page so it shows fresh data
   revalidatePath(`/dashboard/notes/${noteId}`);
 }
+
+// Add to src/app/actions.ts
+
+interface RelatedNote {
+  id: string;
+  content: string;
+  similarity: number;
+}
+
+export async function chatWithBrain(
+  history: { role: string; content: string }[],
+  userQuestion: string
+) {
+  const supabase = await createClient();
+
+  // 1. Embed the user's question
+  const result = await genAI.models.embedContent({
+    model: "text-embedding-004",
+    contents: userQuestion,
+    config: { outputDimensionality: 768 },
+  });
+
+  // 2. Find relevant notes
+  const { data: relatedNotes } = await supabase.rpc("match_notes", {
+    query_embedding: result.embeddings?.[0]?.values,
+    match_threshold: 0.5,
+    match_count: 5, // Give the AI the top 5 most relevant notes
+  });
+
+  // 3. Construct the Context String
+  const notes = relatedNotes as RelatedNote[] | null;
+  const contextText =
+    notes?.map((note) => note.content).join("\n---\n") ||
+    "No relevant notes found.";
+
+  // 4. Call Gemini 1.5 Flash with the context
+  const response = await genAI.models.generateContent({
+    model: "gemini-1.5-flash",
+    contents: `
+    You are a Second Brain AI. Answer the user's question primarily based on the Context provided below.
+    If the answer is not in the context, say "I don't have that in my memory."
+    
+    CONTEXT (User's Notes):
+    ${contextText}
+    
+    USER QUESTION:
+    ${userQuestion}
+  `,
+  });
+
+  const text = response.text || "";
+
+  return { answer: text, sources: notes };
+}

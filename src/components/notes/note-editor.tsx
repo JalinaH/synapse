@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { updateNote } from "@/app/actions";
 import Markdown from "react-markdown"; // The markdown renderer
-import { Edit2, Save, X } from "lucide-react";
+import { Edit2, Save, X, FileText } from "lucide-react";
+import { useTheme } from "@/components/theme-provider";
 
 interface Note {
   id: string;
@@ -15,6 +16,8 @@ export function NoteEditor({ note }: { note: Note }) {
   const [isEditing, setIsEditing] = useState(false);
   const [content, setContent] = useState(note.content);
   const [isSaving, setIsSaving] = useState(false);
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -28,11 +31,39 @@ export function NoteEditor({ note }: { note: Note }) {
   };
 
   return (
-    <div className="flex flex-col flex-1 bg-white rounded-2xl border shadow-sm h-full overflow-hidden">
+    <div
+      className={`flex flex-col flex-1 rounded-2xl border shadow-lg overflow-hidden transition-colors ${
+        isDark
+          ? "bg-neutral-900/80 border-neutral-800 shadow-black/30"
+          : "bg-white/80 border-gray-100 shadow-gray-200/60"
+      }`}
+    >
       {/* Toolbar */}
-      <div className="border-b px-6 py-4 flex justify-between items-center bg-gray-50/50">
-        <div className="text-sm text-gray-500 font-mono">
-          ID: {note.id} • {new Date(note.created_at).toLocaleDateString()}
+      <div
+        className={`border-b px-6 py-4 flex justify-between items-center transition-colors ${
+          isDark
+            ? "bg-neutral-900 border-neutral-800"
+            : "bg-gray-50/80 border-gray-200"
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <div
+            className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+              isDark ? "bg-neutral-800" : "bg-gray-200"
+            }`}
+          >
+            <FileText
+              size={16}
+              className={isDark ? "text-gray-400" : "text-gray-600"}
+            />
+          </div>
+          <span
+            className={`text-sm font-mono ${
+              isDark ? "text-gray-400" : "text-gray-500"
+            }`}
+          >
+            {new Date(note.created_at).toLocaleDateString()}
+          </span>
         </div>
 
         {isEditing ? (
@@ -40,14 +71,22 @@ export function NoteEditor({ note }: { note: Note }) {
             <button
               onClick={() => setIsEditing(false)}
               disabled={isSaving}
-              className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded-md transition flex items-center gap-2"
+              className={`px-4 py-2 text-sm rounded-xl transition-colors flex items-center gap-2 ${
+                isDark
+                  ? "text-gray-300 hover:bg-neutral-800"
+                  : "text-gray-600 hover:bg-gray-100"
+              }`}
             >
               <X size={16} /> Cancel
             </button>
             <button
               onClick={handleSave}
               disabled={isSaving}
-              className="px-3 py-1.5 text-sm bg-black text-white rounded-md hover:bg-gray-800 transition flex items-center gap-2"
+              className={`px-4 py-2 text-sm rounded-xl font-semibold transition-all flex items-center gap-2 shadow-lg ${
+                isDark
+                  ? "bg-white text-black hover:bg-gray-100 shadow-black/30"
+                  : "bg-black text-white hover:bg-gray-900 shadow-gray-300/60"
+              }`}
             >
               {isSaving ? (
                 "Saving..."
@@ -61,7 +100,11 @@ export function NoteEditor({ note }: { note: Note }) {
         ) : (
           <button
             onClick={() => setIsEditing(true)}
-            className="px-3 py-1.5 text-sm border bg-white hover:bg-gray-50 rounded-md transition flex items-center gap-2"
+            className={`px-4 py-2 text-sm rounded-xl font-medium transition-colors flex items-center gap-2 border ${
+              isDark
+                ? "bg-neutral-800 border-neutral-700 text-gray-200 hover:border-neutral-600"
+                : "bg-white border-gray-200 text-gray-700 hover:border-gray-300"
+            }`}
           >
             <Edit2 size={16} /> Edit Note
           </button>
@@ -74,13 +117,23 @@ export function NoteEditor({ note }: { note: Note }) {
           <textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            className="w-full h-full resize-none outline-none text-lg leading-relaxed text-gray-800 font-mono bg-transparent"
+            className={`w-full h-full resize-none outline-none text-lg leading-relaxed font-mono bg-transparent ${
+              isDark
+                ? "text-gray-100 placeholder:text-gray-600"
+                : "text-gray-800 placeholder:text-gray-400"
+            }`}
             placeholder="Start typing..."
             autoFocus
           />
         ) : (
           // Tailwind Typography (prose) makes the markdown look great automatically
-          <article className="prose prose-lg max-w-none prose-headings:font-bold prose-a:text-blue-600">
+          <article
+            className={`prose prose-lg max-w-none prose-headings:font-bold ${
+              isDark
+                ? "prose-invert prose-a:text-blue-400"
+                : "prose-a:text-blue-600"
+            }`}
+          >
             <Markdown>{content}</Markdown>
           </article>
         )}
