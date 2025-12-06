@@ -1,27 +1,32 @@
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
 
-export default function LoginPage({
+export default function RegisterPage({
   searchParams,
 }: {
   searchParams?: { message?: string };
 }) {
-  const login = async (formData: FormData) => {
+  const signup = async (formData: FormData) => {
     "use server";
+    const origin = (await headers()).get("origin");
     const email = formData.get("email") as string;
     const password = formData.get("password") as string;
     const supabase = await createClient();
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { error } = await supabase.auth.signUp({
       email,
       password,
+      options: { emailRedirectTo: `${origin}/auth/callback` },
     });
 
     if (error)
-      return redirect("/auth/login?message=Could not authenticate user");
+      return redirect("/auth/register?message=Could not create account");
 
-    return redirect("/dashboard");
+    return redirect(
+      "/auth/login?message=Check your email to finish signing in"
+    );
   };
 
   return (
@@ -31,14 +36,16 @@ export default function LoginPage({
           <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-black text-white shadow-lg shadow-gray-200">
             <span className="text-lg font-semibold">S</span>
           </div>
-          <h1 className="text-2xl font-semibold text-gray-900">Welcome back</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">
+            Create your account
+          </h1>
           <p className="text-sm text-gray-500">
-            Sign in to your Synapse workspace
+            Start your second brain with Synapse
           </p>
         </div>
 
         <div className="rounded-2xl border border-gray-200 bg-white/80 p-6 shadow-xl shadow-gray-200/60">
-          <form className="space-y-4" action={login}>
+          <form className="space-y-4" action={signup}>
             <div className="space-y-2">
               <label
                 className="text-sm font-medium text-gray-700"
@@ -77,17 +84,17 @@ export default function LoginPage({
               type="submit"
               className="w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-gray-300/60 transition hover:bg-black"
             >
-              Sign In
+              Create account
             </button>
           </form>
 
           <div className="mt-4 flex items-center justify-between text-sm text-gray-600">
-            <span>Don&apos;t have an account?</span>
+            <span>Already have an account?</span>
             <Link
-              href="/auth/register"
+              href="/auth/login"
               className="font-semibold text-gray-900 hover:underline"
             >
-              Create one
+              Sign in
             </Link>
           </div>
 
