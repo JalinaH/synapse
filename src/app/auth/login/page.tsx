@@ -1,27 +1,16 @@
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 
-export default function LoginPage({
+export default async function LoginPage({
   searchParams,
 }: {
-  searchParams?: { message?: string };
+  searchParams: Promise<{ message?: string }>;
 }) {
-  const login = async (formData: FormData) => {
+  const { message } = await searchParams;
+
+  const login = async () => {
     "use server";
-    const email = formData.get("email") as string;
-    const password = formData.get("password") as string;
-    const supabase = await createClient();
-
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error)
-      return redirect("/auth/login?message=Could not authenticate user");
-
-    return redirect("/dashboard");
+    redirect("/");
   };
 
   return (
@@ -91,9 +80,9 @@ export default function LoginPage({
             </Link>
           </div>
 
-          {searchParams?.message && (
+          {message && (
             <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 text-center">
-              {searchParams.message}
+              {message}
             </p>
           )}
         </div>

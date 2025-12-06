@@ -3,11 +3,12 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
-export default function RegisterPage({
+export default async function RegisterPage({
   searchParams,
 }: {
-  searchParams?: { message?: string };
+  searchParams: Promise<{ message?: string }>;
 }) {
+  const { message } = await searchParams;
   const signup = async (formData: FormData) => {
     "use server";
     const origin = (await headers()).get("origin");
@@ -98,9 +99,9 @@ export default function RegisterPage({
             </Link>
           </div>
 
-          {searchParams?.message && (
+          {message && (
             <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 text-center">
-              {searchParams.message}
+              {message}
             </p>
           )}
         </div>

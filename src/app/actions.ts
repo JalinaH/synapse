@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { GoogleGenAI } from "@google/genai";
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 const genAI = new GoogleGenAI({
@@ -59,4 +60,34 @@ export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut();
   redirect("/auth/login");
+}
+
+// Add this to your existing actions.ts file
+
+export async function updateNote(formData: FormData) {
+  const noteId = formData.get("noteId") as string;
+  const content = formData.get("content") as string;
+
+  const supabase = await createClient();
+
+  // 1. Generate NEW Embedding (because content changed)
+  const result = await genAI.models.embedContent({
+    model: "text-embedding-004",
+    contents: content,
+    config: { outputDimensionality: 768 },
+  });
+
+  // 2. Update Supabase
+  const { error } = await supabase
+    .from("notes")
+    .update({
+      content: content,
+      embedding: result.embeddings?.[0]?.values,
+    })
+    .eq("id", noteId);
+
+  if (error) throw new Error("Failed to update note");
+
+  // 3. Revalidate the page so it shows fresh data
+  revalidatePath(`/dashboard/notes/${noteId}`);
 }

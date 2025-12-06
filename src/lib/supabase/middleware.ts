@@ -33,13 +33,13 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // PROTECTED ROUTES LOGIC
+  // PROTECTED ROUTES LOGIC - DISABLED FOR TESTING
   // If user is NOT logged in and tries to access /dashboard, kick them to /auth/login
-  if (!user && request.nextUrl.pathname.startsWith("/dashboard")) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/auth/login";
-    return NextResponse.redirect(url);
-  }
+  // if (!user && request.nextUrl.pathname.startsWith("/dashboard")) {
+  //   const url = request.nextUrl.clone();
+  //   url.pathname = "/auth/login";
+  //   return NextResponse.redirect(url);
+  // }
 
   return supabaseResponse;
 }
