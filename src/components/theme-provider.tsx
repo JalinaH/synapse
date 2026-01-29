@@ -25,12 +25,15 @@ function getPreferredTheme(): Theme {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("light");
+  const [theme, setThemeState] = useState<Theme>(() => {
+    if (typeof window !== "undefined") {
+      return getPreferredTheme();
+    }
+    return "light";
+  });
   const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
-    const preferred = getPreferredTheme();
-    setThemeState(preferred);
     setIsHydrated(true);
   }, []);
 
@@ -50,7 +53,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       toggleTheme: () =>
         setThemeState((t) => (t === "light" ? "dark" : "light")),
     }),
-    [theme]
+    [theme],
   );
 
   return (

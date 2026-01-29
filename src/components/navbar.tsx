@@ -2,15 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  Brain,
-  MessageCircle,
-  Home,
-  LogOut,
-  Sun,
-  Moon,
-  Sparkles,
-} from "lucide-react";
+import { Brain, MessageCircle, Home, LogOut, Sun, Moon } from "lucide-react";
 import { signOut } from "@/app/actions";
 import { useTheme } from "@/components/theme-provider";
 
@@ -80,8 +72,8 @@ export function Navbar() {
                       ? "bg-white text-black"
                       : "bg-black text-white"
                     : isDark
-                    ? "text-gray-300 hover:bg-neutral-800 hover:text-white"
-                    : "text-gray-600 hover:bg-gray-100 hover:text-black"
+                      ? "text-gray-300 hover:bg-neutral-800 hover:text-white"
+                      : "text-gray-600 hover:bg-gray-100 hover:text-black"
                 }`}
               >
                 <Icon size={18} />
