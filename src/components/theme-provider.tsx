@@ -2,11 +2,10 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useLayoutEffect,
   useMemo,
-  useRef,
-  useState,
   useSyncExternalStore,
 } from "react";
 
@@ -22,6 +21,27 @@ type ThemeContextValue = {
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
+// Module-level state to avoid effects calling setState
+let currentTheme: Theme = "light";
+const listeners = new Set<() => void>();
+
+function notifyListeners() {
+  listeners.forEach((listener) => listener());
+}
+
+function getSnapshot(): Theme {
+  return currentTheme;
+}
+
+function getServerSnapshot(): Theme {
+  return "light";
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 function getPreferredTheme(): Theme {
   if (typeof window === "undefined") return "light";
   const fromDom = document.documentElement.dataset.theme as Theme | undefined;
@@ -32,47 +52,36 @@ function getPreferredTheme(): Theme {
   return prefersDark ? "dark" : "light";
 }
 
-// Use useSyncExternalStore to detect hydration without calling setState in effect
-function useIsHydrated() {
-  return useSyncExternalStore(
-    () => () => {},
-    () => true,
-    () => false,
-  );
+// Initialize on module load (client-side only)
+if (typeof window !== "undefined") {
+  currentTheme = getPreferredTheme();
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("light");
-  const isHydrated = useIsHydrated();
-  const initialized = useRef(false);
+  const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  // Initialize theme on first hydrated render
-  if (isHydrated && !initialized.current) {
-    initialized.current = true;
-    const preferred = getPreferredTheme();
-    if (preferred !== theme) {
-      setThemeState(preferred);
-    }
-  }
+  const setTheme = useCallback((newTheme: Theme) => {
+    currentTheme = newTheme;
+    notifyListeners();
+  }, []);
 
-  // Sync theme to DOM - useLayoutEffect avoids flash
+  // Sync theme to DOM
   useLayoutEffect(() => {
-    if (!isHydrated || typeof document === "undefined") return;
+    if (typeof document === "undefined") return;
     const root = document.documentElement;
     root.dataset.theme = theme;
     root.classList.remove("light", "dark");
     root.classList.add(theme);
     window.localStorage.setItem(STORAGE_KEY, theme);
-  }, [theme, isHydrated]);
+  }, [theme]);
 
   const value = useMemo<ThemeContextValue>(
     () => ({
       theme,
-      setTheme: setThemeState,
-      toggleTheme: () =>
-        setThemeState((t) => (t === "light" ? "dark" : "light")),
+      setTheme,
+      toggleTheme: () => setTheme(theme === "light" ? "dark" : "light"),
     }),
-    [theme],
+    [theme, setTheme],
   );
 
   return (
