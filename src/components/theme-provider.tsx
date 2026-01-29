@@ -25,13 +25,23 @@ function getPreferredTheme(): Theme {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => getPreferredTheme());
+  const [theme, setThemeState] = useState<Theme>("light");
+  const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
-    if (typeof document === "undefined") return;
-    document.documentElement.dataset.theme = theme;
+    const preferred = getPreferredTheme();
+    setThemeState(preferred);
+    setIsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated || typeof document === "undefined") return;
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    root.classList.remove("light", "dark");
+    root.classList.add(theme);
     window.localStorage.setItem(STORAGE_KEY, theme);
-  }, [theme]);
+  }, [theme, isHydrated]);
 
   const value = useMemo<ThemeContextValue>(
     () => ({

@@ -1,10 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Brain, Sun, Moon } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
 import { Space_Grotesk } from "next/font/google";
+import { signUp } from "@/app/actions";
 
 const grotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -12,13 +13,23 @@ const grotesk = Space_Grotesk({
 });
 
 export default function RegisterPage() {
-  const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === "dark";
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    router.push("/dashboard");
+    setError(null);
+    setLoading(true);
+
+    const formData = new FormData(e.currentTarget);
+    const result = await signUp(formData);
+
+    if (result?.error) {
+      setError(result.error);
+      setLoading(false);
+    }
   };
 
   return (
@@ -73,7 +84,58 @@ export default function RegisterPage() {
               : "bg-white/80 border-gray-100 shadow-gray-200/60"
           }`}
         >
+          {error && (
+            <div className="mb-4 rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-500">
+              {error}
+            </div>
+          )}
           <form className="space-y-4" onSubmit={handleRegister}>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <label
+                  className={`text-sm font-medium ${
+                    isDark ? "text-gray-300" : "text-gray-700"
+                  }`}
+                  htmlFor="firstName"
+                >
+                  First Name
+                </label>
+                <input
+                  className={`w-full rounded-xl border px-4 py-3 text-sm transition-colors outline-none ${
+                    isDark
+                      ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
+                      : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+                  }`}
+                  id="firstName"
+                  name="firstName"
+                  type="text"
+                  placeholder="John"
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <label
+                  className={`text-sm font-medium ${
+                    isDark ? "text-gray-300" : "text-gray-700"
+                  }`}
+                  htmlFor="lastName"
+                >
+                  Last Name
+                </label>
+                <input
+                  className={`w-full rounded-xl border px-4 py-3 text-sm transition-colors outline-none ${
+                    isDark
+                      ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
+                      : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+                  }`}
+                  id="lastName"
+                  name="lastName"
+                  type="text"
+                  placeholder="Doe"
+                  required
+                />
+              </div>
+            </div>
             <div className="space-y-2">
               <label
                 className={`text-sm font-medium ${
@@ -122,13 +184,14 @@ export default function RegisterPage() {
 
             <button
               type="submit"
-              className={`w-full rounded-xl px-4 py-3 text-sm font-semibold shadow-lg transition-all hover:scale-[1.02] ${
+              disabled={loading}
+              className={`w-full rounded-xl px-4 py-3 text-sm font-semibold shadow-lg transition-all hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 ${
                 isDark
                   ? "bg-white text-black hover:bg-gray-100 shadow-black/30"
                   : "bg-black text-white hover:bg-gray-900 shadow-gray-300/60"
               }`}
             >
-              Create account
+              {loading ? "Creating account..." : "Create account"}
             </button>
           </form>
 
