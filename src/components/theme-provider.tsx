@@ -1,6 +1,14 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 const STORAGE_KEY = "synapse-theme";
 
@@ -24,20 +32,31 @@ function getPreferredTheme(): Theme {
   return prefersDark ? "dark" : "light";
 }
 
+// Use useSyncExternalStore to detect hydration without calling setState in effect
+function useIsHydrated() {
+  return useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    if (typeof window !== "undefined") {
-      return getPreferredTheme();
+  const [theme, setThemeState] = useState<Theme>("light");
+  const isHydrated = useIsHydrated();
+  const initialized = useRef(false);
+
+  // Initialize theme on first hydrated render
+  if (isHydrated && !initialized.current) {
+    initialized.current = true;
+    const preferred = getPreferredTheme();
+    if (preferred !== theme) {
+      setThemeState(preferred);
     }
-    return "light";
-  });
-  const [isHydrated, setIsHydrated] = useState(false);
+  }
 
-  useEffect(() => {
-    setIsHydrated(true);
-  }, []);
-
-  useEffect(() => {
+  // Sync theme to DOM - useLayoutEffect avoids flash
+  useLayoutEffect(() => {
     if (!isHydrated || typeof document === "undefined") return;
     const root = document.documentElement;
     root.dataset.theme = theme;
