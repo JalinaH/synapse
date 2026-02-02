@@ -2,13 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Brain, MessageCircle, Home, LogOut, Sun, Moon } from "lucide-react";
+import {
+  Brain,
+  MessageCircle,
+  Home,
+  LogOut,
+  Sun,
+  Moon,
+  User,
+} from "lucide-react";
 import { signOut } from "@/app/actions";
 import { useTheme } from "@/components/theme-provider";
 
 const navItems = [
   { href: "/dashboard", label: "Home", icon: Home },
   { href: "/dashboard/chat", label: "Chat", icon: MessageCircle },
+  { href: "/dashboard/profile", label: "Profile", icon: User },
 ];
 
 export function Navbar() {

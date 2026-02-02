@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { addNote, searchNotes } from "@/app/actions";
 import { useTheme } from "@/components/theme-provider";
-import { Plus, Search, Sparkles } from "lucide-react";
+import { BookOpen, Plus, Search, Sparkles } from "lucide-react";
 
 interface Note {
   id: string;
@@ -31,6 +32,32 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-10">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-8">
+        <div>
+          <h1
+            className={`text-3xl font-bold tracking-tight ${
+              isDark ? "text-gray-50" : "text-gray-900"
+            }`}
+          >
+            Dashboard
+          </h1>
+          <p className={isDark ? "text-gray-400" : "text-gray-500"}>
+            Capture new notes and revisit your library anytime.
+          </p>
+        </div>
+        <Link
+          href="/dashboard/notes"
+          className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold shadow-lg transition-all hover:scale-[1.02] ${
+            isDark
+              ? "bg-white text-black hover:bg-gray-100 shadow-black/30"
+              : "bg-black text-white hover:bg-gray-900 shadow-gray-300/60"
+          }`}
+        >
+          <BookOpen size={18} />
+          Notes Library
+        </Link>
+      </div>
+
       {/* 1. Add Note Section */}
       <div
         className={`mb-10 p-6 rounded-2xl border shadow-lg transition-colors ${

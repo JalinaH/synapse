@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { GoogleGenAI } from "@google/genai";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { SupabaseClient } from "@supabase/supabase-js";
 
 // Initialize Gemini Client
 const genAI = new GoogleGenAI({
@@ -57,8 +58,7 @@ export async function addNote(formData: FormData) {
     revalidatePath("/dashboard/notes"); // Refresh the list
   } catch (err) {
     return {
-      error:
-        err instanceof Error ? err.message : "Failed to save note",
+      error: err instanceof Error ? err.message : "Failed to save note",
     };
   }
 
@@ -147,8 +147,15 @@ export async function signOut() {
 export async function updateNote(formData: FormData) {
   const noteId = formData.get("noteId") as string;
   const content = formData.get("content") as string;
+  if (!noteId) return { error: "Missing note id" };
+  if (!content) return { error: "Content is required" };
 
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return { error: "Unauthorized" };
 
   // Generate NEW Embedding
   const result = await genAI.models.embedContent({
@@ -158,19 +165,57 @@ export async function updateNote(formData: FormData) {
   });
 
   const vector = extractEmbedding(result);
+  if (!vector) return { error: "Failed to generate embedding" };
 
   // Update Supabase
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("notes")
     .update({
       content: content,
       embedding: vector,
     })
-    .eq("id", noteId);
+    .eq("id", noteId)
+    .eq("user_id", user.id)
+    .select("id");
 
-  if (error) throw new Error("Failed to update note");
+  if (error) return { error: error.message };
+  if (!data || data.length === 0) {
+    return { error: "Note not found or unauthorized" };
+  }
 
   revalidatePath(`/dashboard/notes/${noteId}`);
+  revalidatePath("/dashboard/notes");
+
+  return { success: true };
+}
+
+// 4b. Delete Note
+export async function deleteNote(formData: FormData) {
+  const noteId = formData.get("noteId") as string;
+  if (!noteId) return { error: "Missing note id" };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return { error: "Unauthorized" };
+
+  const { data, error } = await supabase
+    .from("notes")
+    .delete()
+    .eq("id", noteId)
+    .eq("user_id", user.id)
+    .select("id");
+
+  if (error) return { error: error.message };
+  if (!data || data.length === 0) {
+    return { error: "Note not found or unauthorized" };
+  }
+
+  revalidatePath("/dashboard/notes");
+
+  return { success: true };
 }
 
 // 5. Chat Action (RAG)
@@ -233,4 +278,86 @@ export async function chatWithBrain(
   const text = response.text || "";
 
   return { answer: text, sources: notes };
+}
+
+export async function updateProfile(formData: FormData) {
+  const firstName = formData.get("firstName") as string;
+  const lastName = formData.get("lastName") as string;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) throw new Error("Unauthorized");
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({
+      first_name: firstName,
+      last_name: lastName,
+    })
+    .eq("id", user.id);
+
+  if (error) {
+    console.error("Profile update error:", error);
+    throw new Error("Failed to update profile");
+  }
+
+  revalidatePath("/dashboard/profile");
+}
+
+// Define your tiers here for easy changing later
+const TIER_LIMITS = {
+  free: 1500,
+  pro: 5000,
+  ultra: 7500
+};
+
+async function checkAndIncrementUsage(supabase: SupabaseClient, userId: string) {
+  // 1. Fetch Profile
+  const { data: profile, error } = await supabase
+    .from('profiles')
+    .select('tier, credits_used, billing_start_date')
+    .eq('id', userId)
+    .single();
+
+  if (error || !profile) throw new Error("User profile not found");
+
+  const now = new Date();
+  const startDate = new Date(profile.billing_start_date);
+  
+  // Calculate if a month has passed (approx 30 days)
+  const isNewCycle = (now.getTime() - startDate.getTime()) > (30 * 24 * 60 * 60 * 1000);
+
+  let currentUsage = profile.credits_used;
+  let newStartDate = profile.billing_start_date;
+
+  // 2. LAZY RESET: If it's a new month, reset counters
+  if (isNewCycle) {
+    currentUsage = 0;
+    newStartDate = now.toISOString(); // Reset start date to today
+    
+    // Update DB immediately for the reset
+    await supabase.from('profiles').update({
+      credits_used: 0,
+      billing_start_date: newStartDate
+    }).eq('id', userId);
+  }
+
+  // 3. Check Limits
+  const userTier = (profile.tier || 'free') as keyof typeof TIER_LIMITS;
+  const limit = TIER_LIMITS[userTier];
+
+  if (currentUsage >= limit) {
+    throw new Error(`Monthly limit of ${limit} reached. Upgrade your plan for more.`);
+  }
+
+  // 4. Increment Usage
+  await supabase
+    .from('profiles')
+    .update({ credits_used: currentUsage + 1 })
+    .eq('id', userId);
+    
+  return true;
 }
