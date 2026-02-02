@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { Zap, Crown } from "lucide-react";
 
 interface Props {
@@ -8,14 +9,14 @@ interface Props {
 }
 
 export function SubscriptionCard({ tier = "free", usage = 0 }: Props) {
+  const router = useRouter();
   const limits = { free: 1500, pro: 5000, ultra: 7500 };
   const limit = limits[tier] || 1500;
   const percentage = Math.min((usage / limit) * 100, 100);
   const remaining = limit - usage;
 
   const handleUpgrade = (plan: string) => {
-    // In the future, this calls your Stripe Checkout Server Action
-    alert(`Redirecting to Stripe to upgrade to ${plan}...`);
+    router.push(`/dashboard/subscribe?plan=${plan}`);
   };
 
   return (
