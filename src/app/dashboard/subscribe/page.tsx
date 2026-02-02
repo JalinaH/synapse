@@ -49,9 +49,7 @@ export default async function SubscribePage({
     return (
       <div className="max-w-3xl mx-auto p-8">
         <div className="rounded-2xl border border-(--border) bg-(--surface) p-6 shadow-sm">
-          <h1 className="text-2xl font-bold text-foreground">
-            Subscription
-          </h1>
+          <h1 className="text-2xl font-bold text-foreground">Subscription</h1>
           <p className="text-(--muted) mt-2">
             You need to sign in to manage your subscription.
           </p>
@@ -73,10 +71,9 @@ export default async function SubscribePage({
     .single();
 
   const currentPlan = (profile?.tier || "free") as (typeof plans)[number]["id"];
-  const selectedPlan =
-    (plans.find((plan) => plan.id === searchParams?.plan) ||
-      plans.find((plan) => plan.id === currentPlan) ||
-      plans[1]) as (typeof plans)[number];
+  const selectedPlan = (plans.find((plan) => plan.id === searchParams?.plan) ||
+    plans.find((plan) => plan.id === currentPlan) ||
+    plans[1]) as (typeof plans)[number];
 
   return (
     <div className="max-w-6xl mx-auto p-6 md:p-10 space-y-8">
@@ -125,7 +122,8 @@ export default async function SubscribePage({
                       )}
                     </div>
                     <p className="mt-2 text-(--muted) text-sm">
-                      {plan.credits} credits · {plan.speed} AI · {plan.support} support
+                      {plan.credits} credits · {plan.speed} AI · {plan.support}{" "}
+                      support
                     </p>
                   </div>
                   <div className="flex items-center gap-4">
