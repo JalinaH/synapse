@@ -19,18 +19,18 @@ export function SubscriptionCard({ tier = "free", usage = 0 }: Props) {
   };
 
   return (
-    <div className="bg-[color:var(--surface)] p-6 rounded-2xl border border-[color:var(--border)] shadow-sm space-y-6">
+    <div className="bg-(--surface) p-6 rounded-2xl border border-(--border) shadow-sm space-y-6">
       {/* 1. CURRENT USAGE STATS */}
       <div>
         <div className="flex justify-between items-center mb-4">
           <div>
-            <h3 className="text-sm font-bold flex items-center gap-2 uppercase tracking-wide text-[color:var(--muted)]">
+            <h3 className="text-sm font-bold flex items-center gap-2 uppercase tracking-wide text-(--muted)">
               {tier === "ultra" ? (
                 <Crown className="text-yellow-500 fill-yellow-500" size={16} />
               ) : tier === "pro" ? (
                 <Zap className="text-blue-500 fill-blue-500" size={16} />
               ) : (
-                <span className="bg-[color:var(--background)] text-[color:var(--muted)] px-2 py-0.5 rounded text-[10px] border border-[color:var(--border)]">
+                <span className="bg-background text-(--muted) px-2 py-0.5 rounded text-[10px] border border-(--border)">
                   FREE TIER
                 </span>
               )}
@@ -38,10 +38,10 @@ export function SubscriptionCard({ tier = "free", usage = 0 }: Props) {
             </h3>
           </div>
           <div className="text-right">
-            <span className="text-xl font-bold text-[color:var(--foreground)]">
+            <span className="text-xl font-bold text-foreground">
               {usage.toLocaleString()}
             </span>
-            <span className="text-[color:var(--muted)] text-sm">
+            <span className="text-(--muted) text-sm">
               {" "}
               / {limit.toLocaleString()}
             </span>
@@ -49,22 +49,22 @@ export function SubscriptionCard({ tier = "free", usage = 0 }: Props) {
         </div>
 
         {/* Progress Bar */}
-        <div className="w-full bg-[color:var(--background)] rounded-full h-2 overflow-hidden mb-2 border border-[color:var(--border)]">
+        <div className="w-full bg-background rounded-full h-2 overflow-hidden mb-2 border border-(--border)">
           <div
             className={`h-full transition-all duration-500 ${
-              percentage > 90 ? "bg-red-500" : "bg-[color:var(--foreground)]"
+              percentage > 90 ? "bg-red-500" : "bg-foreground"
             }`}
             style={{ width: `${percentage}%` }}
           />
         </div>
 
         <div className="flex justify-between text-xs">
-          <span className="text-[color:var(--muted)]">Monthly Usage</span>
+          <span className="text-(--muted)">Monthly Usage</span>
           <span
             className={
               remaining < 100
                 ? "text-red-500 font-bold"
-                : "text-[color:var(--muted)]"
+                : "text-(--muted)"
             }
           >
             {remaining.toLocaleString()} credits left
@@ -74,24 +74,24 @@ export function SubscriptionCard({ tier = "free", usage = 0 }: Props) {
 
       {/* 2. UPGRADE TEASER (Hidden if Ultra) */}
       {tier !== "ultra" && (
-        <div className="pt-6 border-t border-dashed border-[color:var(--border)]">
-          <h4 className="font-bold text-[color:var(--foreground)] mb-2 flex items-center gap-2">
+        <div className="pt-6 border-t border-dashed border-(--border)">
+          <h4 className="font-bold text-foreground mb-2 flex items-center gap-2">
             <Zap size={16} className="text-yellow-500" /> Upgrade & Unlock
           </h4>
-          <p className="text-xs text-[color:var(--muted)] mb-4">
+          <p className="text-xs text-(--muted) mb-4">
             Get more credits, faster AI speeds, and priority vector indexing.
           </p>
           <div className="grid grid-cols-2 gap-3">
             <button
               onClick={() => handleUpgrade("pro")}
               disabled={tier === "pro"}
-              className="py-2 px-3 text-xs font-bold rounded-lg border border-[color:var(--border)] hover:border-[color:var(--foreground)] hover:bg-[color:var(--background)] transition disabled:opacity-50"
+              className="py-2 px-3 text-xs font-bold rounded-lg border border-(--border) hover:border-foreground hover:bg-background transition disabled:opacity-50"
             >
               Pro (5k)
             </button>
             <button
               onClick={() => handleUpgrade("ultra")}
-              className="py-2 px-3 text-xs font-bold rounded-lg bg-[color:var(--foreground)] text-[color:var(--background)] hover:opacity-90 transition"
+              className="py-2 px-3 text-xs font-bold rounded-lg bg-foreground text-background hover:opacity-90 transition"
             >
               Ultra (7.5k)
             </button>
