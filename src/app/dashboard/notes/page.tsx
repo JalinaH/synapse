@@ -14,16 +14,18 @@ export default async function NotesLibraryPage() {
   return (
     <div className="max-w-6xl mx-auto p-8">
       {/* Header */}
-      <div className="flex justify-between items-center mb-10">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-10">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">My Library</h1>
-          <p className="text-gray-500 mt-1">
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">
+            My Library
+          </h1>
+          <p className="text-muted mt-1">
             {notes?.length || 0} memories stored
           </p>
         </div>
         <Link
           href="/dashboard"
-          className="bg-black text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-gray-800 transition"
+          className="bg-foreground text-background px-4 py-2 rounded-lg flex items-center gap-2 hover:opacity-90 transition"
         >
           <Plus size={18} /> New Note
         </Link>
@@ -35,22 +37,22 @@ export default async function NotesLibraryPage() {
           <Link
             key={note.id}
             href={`/dashboard/notes/${note.id}`}
-            className="group block bg-white border border-gray-200 rounded-2xl p-6 hover:shadow-lg hover:border-purple-200 transition-all duration-200"
+            className="group block bg-surface border border-border rounded-2xl p-6 hover:shadow-lg hover:border-emerald-500/30 transition-all duration-200"
           >
             <div className="h-32 overflow-hidden mb-4 relative">
               {/* Fade out effect at bottom of text */}
-              <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white to-transparent" />
-              <p className="text-gray-600 line-clamp-5 font-mono text-sm leading-relaxed">
+              <div className="absolute inset-x-0 bottom-0 h-12 bg-linear-to-t from-surface to-transparent" />
+              <p className="text-muted line-clamp-5 font-mono text-sm leading-relaxed">
                 {note.content}
               </p>
             </div>
 
-            <div className="flex items-center justify-between pt-4 border-t border-gray-100">
-              <div className="flex items-center gap-2 text-xs text-gray-400">
+            <div className="flex items-center justify-between pt-4 border-t border-border">
+              <div className="flex items-center gap-2 text-xs text-muted">
                 <Calendar size={12} />
                 {new Date(note.created_at).toLocaleDateString()}
               </div>
-              <span className="text-purple-600 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-[-10px] group-hover:translate-x-0 duration-200">
+              <span className="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity transform -translate-x-2.5 group-hover:translate-x-0 duration-200">
                 <ArrowRight size={16} />
               </span>
             </div>
@@ -59,12 +61,17 @@ export default async function NotesLibraryPage() {
 
         {/* Empty State */}
         {notes?.length === 0 && (
-          <div className="col-span-full text-center py-20 bg-gray-50 rounded-2xl border border-dashed">
-            <h3 className="text-gray-500 font-medium">Your brain is empty.</h3>
-            <p className="text-sm text-gray-400 mb-4">
+          <div className="col-span-full text-center py-20 bg-surface rounded-2xl border border-dashed border-border">
+            <h3 className="text-muted font-medium">
+              Your brain is empty.
+            </h3>
+            <p className="text-sm text-muted mb-4">
               Add your first note to start building connections.
             </p>
-            <Link href="/dashboard" className="text-blue-600 hover:underline">
+            <Link
+              href="/dashboard"
+              className="text-emerald-500 hover:underline"
+            >
               Go to Dashboard
             </Link>
           </div>

@@ -137,7 +137,7 @@ export default function LandingPage() {
           >
             <Sparkles size={12} className="text-amber-500" />
             <span className={isDark ? "text-gray-100" : "text-gray-700"}>
-              Gemini 1.5 Flash • Vector Memory • RLS Secure
+              Gemini 2.5 Flash • Vector Memory • RLS Secure
             </span>
           </div>
           <h1 className="text-5xl md:text-6xl lg:text-7xl font-semibold tracking-tight mb-8 leading-[1.05]">
