@@ -19,6 +19,7 @@ export function NoteEditor({ note }: { note: Note }) {
   const [content, setContent] = useState(note.content);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [status, setStatus] = useState<{
     type: "success" | "error";
     message: string;
@@ -46,7 +47,6 @@ export function NoteEditor({ note }: { note: Note }) {
   };
 
   const handleDelete = async () => {
-    if (!confirm("Delete this note? This cannot be undone.")) return;
     setIsDeleting(true);
     setStatus(null);
 
@@ -146,7 +146,7 @@ export function NoteEditor({ note }: { note: Note }) {
             </button>
           )}
           <button
-            onClick={handleDelete}
+            onClick={() => setShowDeleteModal(true)}
             disabled={isSaving || isDeleting}
             className={`px-4 py-2 text-sm rounded-xl font-semibold transition-colors flex items-center gap-2 ${
               isDark
@@ -159,6 +159,60 @@ export function NoteEditor({ note }: { note: Note }) {
           </button>
         </div>
       </div>
+
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowDeleteModal(false)}
+          />
+          <div
+            className={`relative z-10 w-full max-w-sm rounded-2xl border p-6 shadow-2xl ${
+              isDark
+                ? "bg-neutral-900/95 border-neutral-800 text-gray-100"
+                : "bg-white/95 border-gray-200 text-gray-900"
+            }`}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="text-sm font-semibold text-red-500 mb-2">
+              Delete note
+            </div>
+            <p className="text-sm leading-relaxed">
+              This will permanently delete the note. This action cannot be
+              undone.
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteModal(false)}
+                className={`flex-1 rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${
+                  isDark
+                    ? "text-gray-200 hover:bg-neutral-800"
+                    : "text-gray-700 hover:bg-gray-100"
+                }`}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setShowDeleteModal(false);
+                  await handleDelete();
+                }}
+                disabled={isDeleting}
+                className={`flex-1 rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${
+                  isDark
+                    ? "bg-red-500 text-white hover:bg-red-400"
+                    : "bg-red-600 text-white hover:bg-red-500"
+                }`}
+              >
+                {isDeleting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {status && (
         <div

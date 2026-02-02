@@ -157,6 +157,20 @@ export async function updateNote(formData: FormData) {
 
   if (!user) return { error: "Unauthorized" };
 
+  const { data: note, error: noteError } = await supabase
+    .from("notes")
+    .select("id, user_id")
+    .eq("id", noteId)
+    .single();
+
+  if (noteError || !note) {
+    return { error: "Note not found" };
+  }
+
+  if (note.user_id && note.user_id !== user.id) {
+    return { error: "Unauthorized" };
+  }
+
   // Generate NEW Embedding
   const result = await genAI.models.embedContent({
     model: "text-embedding-004",
@@ -168,19 +182,28 @@ export async function updateNote(formData: FormData) {
   if (!vector) return { error: "Failed to generate embedding" };
 
   // Update Supabase
+  const updatePayload: {
+    content: string;
+    embedding: number[];
+    user_id?: string;
+  } = {
+    content: content,
+    embedding: vector,
+  };
+
+  if (!note.user_id) {
+    updatePayload.user_id = user.id;
+  }
+
   const { data, error } = await supabase
     .from("notes")
-    .update({
-      content: content,
-      embedding: vector,
-    })
+    .update(updatePayload)
     .eq("id", noteId)
-    .eq("user_id", user.id)
     .select("id");
 
   if (error) return { error: error.message };
   if (!data || data.length === 0) {
-    return { error: "Note not found or unauthorized" };
+    return { error: "Failed to update note" };
   }
 
   revalidatePath(`/dashboard/notes/${noteId}`);
@@ -201,16 +224,29 @@ export async function deleteNote(formData: FormData) {
 
   if (!user) return { error: "Unauthorized" };
 
+  const { data: note, error: noteError } = await supabase
+    .from("notes")
+    .select("id, user_id")
+    .eq("id", noteId)
+    .single();
+
+  if (noteError || !note) {
+    return { error: "Note not found" };
+  }
+
+  if (note.user_id && note.user_id !== user.id) {
+    return { error: "Unauthorized" };
+  }
+
   const { data, error } = await supabase
     .from("notes")
     .delete()
     .eq("id", noteId)
-    .eq("user_id", user.id)
     .select("id");
 
   if (error) return { error: error.message };
   if (!data || data.length === 0) {
-    return { error: "Note not found or unauthorized" };
+    return { error: "Failed to delete note" };
   }
 
   revalidatePath("/dashboard/notes");
