@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 const genAI = new GoogleGenAI({
-  apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY!,
+  apiKey: process.env.GEMINI_API_KEY!,
 });
 
 // 1. Add Note Action
@@ -178,9 +178,9 @@ export async function chatWithBrain(
     notes?.map((note) => note.content).join("\n---\n") ||
     "No relevant notes found.";
 
-  // 4. Call Gemini 1.5 Flash with the context
+  // 4. Call Gemini 2.0 Flash with the context
   const response = await genAI.models.generateContent({
-    model: "gemini-1.5-flash",
+    model: "gemini-2.5-flash",
     contents: `
     You are a Second Brain AI. Answer the user's question primarily based on the Context provided below.
     If the answer is not in the context, say "I don't have that in my memory."
