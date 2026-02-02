@@ -48,16 +48,16 @@ export default async function SubscribePage({
   if (!user) {
     return (
       <div className="max-w-3xl mx-auto p-8">
-        <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
-          <h1 className="text-2xl font-bold text-[color:var(--foreground)]">
+        <div className="rounded-2xl border border-(--border) bg-(--surface) p-6 shadow-sm">
+          <h1 className="text-2xl font-bold text-foreground">
             Subscription
           </h1>
-          <p className="text-[color:var(--muted)] mt-2">
+          <p className="text-(--muted) mt-2">
             You need to sign in to manage your subscription.
           </p>
           <Link
             href="/auth/login"
-            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[color:var(--foreground)] px-4 py-2 text-sm font-semibold text-[color:var(--background)] hover:opacity-90 transition"
+            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-foreground px-4 py-2 text-sm font-semibold text-background hover:opacity-90 transition"
           >
             Go to login
           </Link>
@@ -82,16 +82,16 @@ export default async function SubscribePage({
     <div className="max-w-6xl mx-auto p-6 md:p-10 space-y-8">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-[color:var(--foreground)]">
+          <h1 className="text-3xl font-bold text-foreground">
             Choose your plan
           </h1>
-          <p className="text-[color:var(--muted)] mt-1">
+          <p className="text-(--muted) mt-1">
             Upgrade anytime. Your notes and embeddings stay intact.
           </p>
         </div>
         <Link
           href="/dashboard/profile"
-          className="text-sm font-semibold text-[color:var(--muted)] hover:text-[color:var(--foreground)] transition"
+          className="text-sm font-semibold text-(--muted) hover:text-foreground transition"
         >
           Back to profile
         </Link>
@@ -107,15 +107,15 @@ export default async function SubscribePage({
             return (
               <div
                 key={plan.id}
-                className={`rounded-2xl border p-6 transition-all shadow-sm bg-[color:var(--surface)] ${
+                className={`rounded-2xl border p-6 transition-all shadow-sm bg-(--surface) ${
                   isSelected
                     ? "border-emerald-500/50 shadow-emerald-500/10"
-                    : "border-[color:var(--border)]"
+                    : "border-(--border)"
                 }`}
               >
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <div className="flex items-center gap-2 text-sm font-semibold text-[color:var(--foreground)]">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <Icon size={18} className="text-emerald-500" />
                       {plan.name}
                       {isCurrent && (
@@ -124,16 +124,16 @@ export default async function SubscribePage({
                         </span>
                       )}
                     </div>
-                    <p className="mt-2 text-[color:var(--muted)] text-sm">
+                    <p className="mt-2 text-(--muted) text-sm">
                       {plan.credits} credits · {plan.speed} AI · {plan.support} support
                     </p>
                   </div>
                   <div className="flex items-center gap-4">
                     <div className="text-right">
-                      <div className="text-2xl font-bold text-[color:var(--foreground)]">
+                      <div className="text-2xl font-bold text-foreground">
                         {plan.price}
                       </div>
-                      <div className="text-xs text-[color:var(--muted)]">
+                      <div className="text-xs text-(--muted)">
                         per {plan.cadence}
                       </div>
                     </div>
@@ -141,15 +141,15 @@ export default async function SubscribePage({
                       href={`/dashboard/subscribe?plan=${plan.id}`}
                       className={`inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold transition-all ${
                         isSelected
-                          ? "bg-[color:var(--foreground)] text-[color:var(--background)]"
-                          : "border border-[color:var(--border)] text-[color:var(--foreground)] hover:border-emerald-500/40"
+                          ? "bg-foreground text-background"
+                          : "border border-(--border) text-foreground hover:border-emerald-500/40"
                       }`}
                     >
                       {isSelected ? "Selected" : "Select"}
                     </Link>
                   </div>
                 </div>
-                <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-[color:var(--muted)]">
+                <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-(--muted)">
                   <div className="flex items-center gap-2">
                     <Check size={14} className="text-emerald-500" />
                     Vector search included
@@ -168,27 +168,27 @@ export default async function SubscribePage({
           })}
         </div>
 
-        <aside className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm h-fit">
-          <div className="flex items-center gap-2 text-sm font-semibold text-[color:var(--foreground)]">
+        <aside className="rounded-2xl border border-(--border) bg-(--surface) p-6 shadow-sm h-fit">
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <ShieldCheck size={16} className="text-emerald-500" />
             Checkout summary
           </div>
           <div className="mt-5 space-y-3">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-[color:var(--muted)]">Selected plan</span>
-              <span className="font-semibold text-[color:var(--foreground)]">
+              <span className="text-(--muted)">Selected plan</span>
+              <span className="font-semibold text-foreground">
                 {selectedPlan.name}
               </span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-[color:var(--muted)]">Monthly price</span>
-              <span className="font-semibold text-[color:var(--foreground)]">
+              <span className="text-(--muted)">Monthly price</span>
+              <span className="font-semibold text-foreground">
                 {selectedPlan.price}
               </span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-[color:var(--muted)]">Included credits</span>
-              <span className="font-semibold text-[color:var(--foreground)]">
+              <span className="text-(--muted)">Included credits</span>
+              <span className="font-semibold text-foreground">
                 {selectedPlan.credits}
               </span>
             </div>
@@ -202,8 +202,8 @@ export default async function SubscribePage({
             type="button"
             className={`mt-6 w-full rounded-xl px-4 py-2 text-sm font-semibold transition-all ${
               selectedPlan.id === currentPlan
-                ? "border border-[color:var(--border)] text-[color:var(--muted)] cursor-not-allowed"
-                : "bg-[color:var(--foreground)] text-[color:var(--background)] hover:opacity-90"
+                ? "border border-(--border) text-(--muted) cursor-not-allowed"
+                : "bg-foreground text-background hover:opacity-90"
             }`}
             disabled={selectedPlan.id === currentPlan}
           >
@@ -212,7 +212,7 @@ export default async function SubscribePage({
               : `Proceed with ${selectedPlan.name}`}
           </button>
 
-          <p className="mt-3 text-[11px] text-[color:var(--muted)]">
+          <p className="mt-3 text-[11px] text-(--muted)">
             Payments aren’t wired yet. We’ll connect Stripe next.
           </p>
         </aside>
