@@ -5,9 +5,22 @@ import { GoogleGenAI } from "@google/genai";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+// Initialize Gemini Client
 const genAI = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY!,
 });
+
+// Helper to safely extract embedding from different SDK versions
+type EmbeddingResponse = {
+  embedding?: { values?: number[] };
+  embeddings?: { values?: number[] }[];
+};
+
+function extractEmbedding(result: EmbeddingResponse) {
+  // The SDK might return 'embedding' (singular) or 'embeddings' (plural)
+  // We check both to be safe.
+  return result.embedding?.values || result.embeddings?.[0]?.values;
+}
 
 // 1. Add Note Action
 export async function addNote(formData: FormData) {
@@ -21,22 +34,35 @@ export async function addNote(formData: FormData) {
 
   if (!user) throw new Error("Unauthorized");
 
-  // Generate Embedding
-  const result = await genAI.models.embedContent({
-    model: "text-embedding-004",
-    contents: content,
-    config: { outputDimensionality: 768 },
-  });
+  try {
+    // Generate Embedding
+    const result = await genAI.models.embedContent({
+      model: "text-embedding-004",
+      contents: content,
+      config: { outputDimensionality: 768 },
+    });
 
-  // Save to DB
-  await supabase.from("notes").insert({
-    user_id: user.id,
-    content: content,
-    embedding: result.embeddings?.[0]?.values,
-  });
+    const vector = extractEmbedding(result);
+
+    if (!vector) {
+      throw new Error("Failed to generate embedding (Vector is null)");
+    }
+
+    // Save to DB
+    const { error } = await supabase.from("notes").insert({
+      user_id: user.id,
+      content: content,
+      embedding: vector,
+    });
+
+    if (error) throw new Error(error.message);
+    revalidatePath("/dashboard/notes"); // Refresh the list
+  } catch (err) {
+    throw err;
+  }
 }
 
-// 2. Search Action
+// 2. Search Action (Used by Library Page)
 export async function searchNotes(query: string) {
   const supabase = await createClient();
 
@@ -46,9 +72,11 @@ export async function searchNotes(query: string) {
     config: { outputDimensionality: 768 },
   });
 
+  const vector = extractEmbedding(result);
+
   const { data } = await supabase.rpc("match_notes", {
-    query_embedding: result.embeddings?.[0]?.values,
-    match_threshold: 0.5,
+    query_embedding: vector,
+    match_threshold: 0.3, // Keep low for broad matching
     match_count: 5,
   });
 
@@ -61,33 +89,31 @@ export async function signUp(formData: FormData) {
   const password = formData.get("password") as string;
   const firstName = formData.get("firstName") as string;
   const lastName = formData.get("lastName") as string;
+  const origin = (await import("next/headers"))
+    .headers()
+    .then((h) => h.get("origin"));
 
   const supabase = await createClient();
 
-  const { data, error } = await supabase.auth.signUp({
+  // We pass metadata here so the SQL Trigger handles the Profile creation
+  const { error } = await supabase.auth.signUp({
     email,
     password,
+    options: {
+      emailRedirectTo: `${await origin}/auth/callback`,
+      data: {
+        first_name: firstName,
+        last_name: lastName,
+      },
+    },
   });
 
   if (error) {
     return { error: error.message };
   }
 
-  // Create profile entry
-  if (data.user) {
-    const { error: profileError } = await supabase.from("profiles").insert({
-      id: data.user.id,
-      email,
-      first_name: firstName,
-      last_name: lastName,
-    });
-
-    if (profileError) {
-      return { error: profileError.message };
-    }
-  }
-
-  redirect("/dashboard");
+  // No manual profile insertion needed (The Trigger does it!)
+  redirect("/auth/login?message=Check your email to continue");
 }
 
 export async function signIn(formData: FormData) {
@@ -114,38 +140,37 @@ export async function signOut() {
   redirect("/auth/login");
 }
 
-// Add this to your existing actions.ts file
-
+// 4. Update Note
 export async function updateNote(formData: FormData) {
   const noteId = formData.get("noteId") as string;
   const content = formData.get("content") as string;
 
   const supabase = await createClient();
 
-  // 1. Generate NEW Embedding (because content changed)
+  // Generate NEW Embedding
   const result = await genAI.models.embedContent({
     model: "text-embedding-004",
     contents: content,
     config: { outputDimensionality: 768 },
   });
 
-  // 2. Update Supabase
+  const vector = extractEmbedding(result);
+
+  // Update Supabase
   const { error } = await supabase
     .from("notes")
     .update({
       content: content,
-      embedding: result.embeddings?.[0]?.values,
+      embedding: vector,
     })
     .eq("id", noteId);
 
   if (error) throw new Error("Failed to update note");
 
-  // 3. Revalidate the page so it shows fresh data
   revalidatePath(`/dashboard/notes/${noteId}`);
 }
 
-// Add to src/app/actions.ts
-
+// 5. Chat Action (RAG)
 interface RelatedNote {
   id: string;
   content: string;
@@ -165,20 +190,29 @@ export async function chatWithBrain(
     config: { outputDimensionality: 768 },
   });
 
+  const vector = extractEmbedding(result);
+
   // 2. Find relevant notes
-  const { data: relatedNotes } = await supabase.rpc("match_notes", {
-    query_embedding: result.embeddings?.[0]?.values,
-    match_threshold: 0.5,
-    match_count: 5, // Give the AI the top 5 most relevant notes
+  // FIXED: We destructured 'error' here so we can check it
+  const { data: relatedNotes, error } = await supabase.rpc("match_notes", {
+    query_embedding: vector,
+    match_threshold: 0.3, // Lower threshold to find more results
+    match_count: 5,
   });
 
-  // 3. Construct the Context String
+  if (error) {
+    return {
+      answer: "I had trouble accessing your memory database.",
+      sources: [],
+    };
+  }
+
+  // 3. Construct Context
   const notes = relatedNotes as RelatedNote[] | null;
   const contextText =
     notes?.map((note) => note.content).join("\n---\n") ||
     "No relevant notes found.";
 
-  // 4. Call Gemini 2.0 Flash with the context
   const response = await genAI.models.generateContent({
     model: "gemini-2.5-flash",
     contents: `
