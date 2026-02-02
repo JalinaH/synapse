@@ -25,14 +25,14 @@ function extractEmbedding(result: EmbeddingResponse) {
 // 1. Add Note Action
 export async function addNote(formData: FormData) {
   const content = formData.get("content") as string;
-  if (!content) return;
+  if (!content) return { error: "Content is required" };
 
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) throw new Error("Unauthorized");
+  if (!user) return { error: "Unauthorized" };
 
   try {
     // Generate Embedding
@@ -44,9 +44,7 @@ export async function addNote(formData: FormData) {
 
     const vector = extractEmbedding(result);
 
-    if (!vector) {
-      throw new Error("Failed to generate embedding (Vector is null)");
-    }
+    if (!vector) return { error: "Failed to generate embedding" };
 
     // Save to DB
     const { error } = await supabase.from("notes").insert({
@@ -55,11 +53,16 @@ export async function addNote(formData: FormData) {
       embedding: vector,
     });
 
-    if (error) throw new Error(error.message);
+    if (error) return { error: error.message };
     revalidatePath("/dashboard/notes"); // Refresh the list
   } catch (err) {
-    throw err;
+    return {
+      error:
+        err instanceof Error ? err.message : "Failed to save note",
+    };
   }
+
+  return { success: true };
 }
 
 // 2. Search Action (Used by Library Page)
