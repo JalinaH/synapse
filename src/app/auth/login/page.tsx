@@ -1,10 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Brain, Sun, Moon } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
 import { Space_Grotesk } from "next/font/google";
+import { signIn } from "@/app/actions";
 
 const grotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -12,13 +13,21 @@ const grotesk = Space_Grotesk({
 });
 
 export default function LoginPage() {
-  const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === "dark";
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    router.push("/dashboard");
+  const handleLogin = async (formData: FormData) => {
+    setError(null);
+    setIsLoading(true);
+
+    const result = await signIn(formData);
+
+    if (result?.error) {
+      setError(result.error);
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -73,7 +82,7 @@ export default function LoginPage() {
               : "bg-white/80 border-gray-100 shadow-gray-200/60"
           }`}
         >
-          <form className="space-y-4" onSubmit={handleLogin}>
+          <form className="space-y-4" action={handleLogin}>
             <div className="space-y-2">
               <label
                 className={`text-sm font-medium ${
@@ -120,15 +129,20 @@ export default function LoginPage() {
               />
             </div>
 
+            {error && (
+              <p className="text-red-500 text-sm text-center">{error}</p>
+            )}
+
             <button
               type="submit"
-              className={`w-full rounded-xl px-4 py-3 text-sm font-semibold shadow-lg transition-all hover:scale-[1.02] ${
+              disabled={isLoading}
+              className={`w-full rounded-xl px-4 py-3 text-sm font-semibold shadow-lg transition-all hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed ${
                 isDark
                   ? "bg-white text-black hover:bg-gray-100 shadow-black/30"
                   : "bg-black text-white hover:bg-gray-900 shadow-gray-300/60"
               }`}
             >
-              Sign In
+              {isLoading ? "Signing in..." : "Sign In"}
             </button>
           </form>
 

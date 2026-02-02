@@ -14,6 +14,10 @@ interface Note {
 export default function Dashboard() {
   const [searchResults, setSearchResults] = useState<Note[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [modal, setModal] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
@@ -49,8 +53,12 @@ export default function Dashboard() {
         </div>
         <form
           action={async (formData) => {
-            await addNote(formData);
-            alert("Note saved to brain!");
+            const result = await addNote(formData);
+            if (result?.error) {
+              setModal({ type: "error", message: result.error });
+              return;
+            }
+            setModal({ type: "success", message: "Note saved to brain!" });
           }}
         >
           <textarea
@@ -75,6 +83,44 @@ export default function Dashboard() {
           </button>
         </form>
       </div>
+
+      {modal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setModal(null)}
+          />
+          <div
+            className={`relative z-10 w-full max-w-sm rounded-2xl border p-6 shadow-2xl ${
+              isDark
+                ? "bg-neutral-900/95 border-neutral-800 text-gray-100"
+                : "bg-white/95 border-gray-200 text-gray-900"
+            }`}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              className={`mb-3 text-sm font-semibold ${
+                modal.type === "success" ? "text-emerald-500" : "text-red-500"
+              }`}
+            >
+              {modal.type === "success" ? "Success" : "Error"}
+            </div>
+            <p className="text-sm leading-relaxed">{modal.message}</p>
+            <button
+              type="button"
+              className={`mt-5 w-full rounded-xl px-4 py-2 text-sm font-semibold transition-all ${
+                isDark
+                  ? "bg-white text-black hover:bg-gray-100"
+                  : "bg-black text-white hover:bg-gray-900"
+              }`}
+              onClick={() => setModal(null)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 2. Search Section */}
       <div
