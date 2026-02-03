@@ -20,9 +20,14 @@ interface RelatedNote {
 interface NotePageContentProps {
   note: Note;
   relatedNotes: RelatedNote[];
+  maxChars: number;
 }
 
-export function NotePageContent({ note, relatedNotes }: NotePageContentProps) {
+export function NotePageContent({
+  note,
+  relatedNotes,
+  maxChars,
+}: NotePageContentProps) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
@@ -42,7 +47,7 @@ export function NotePageContent({ note, relatedNotes }: NotePageContentProps) {
         </Link>
 
         {/* We pass the note data to the Client Component */}
-        <NoteEditor note={note} />
+        <NoteEditor note={note} maxChars={maxChars} />
       </div>
 
       {/* RIGHT COLUMN: AI Sidebar */}

@@ -5,30 +5,12 @@ import { GoogleGenAI } from "@google/genai";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { getTierConfig } from "@/lib/tiers";
 
 // Initialize Gemini Client
 const genAI = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY!,
 });
-
-// --- CONFIGURATION ---
-const TIER_CONFIG = {
-  free: {
-    credits: 1000,
-    notes: 50,
-    maxChars: 1000,
-  },
-  pro: {
-    credits: 5000,
-    notes: 250,
-    maxChars: 20000,
-  },
-  ultra: {
-    credits: 10000,
-    notes: Infinity,
-    maxChars: 100000,
-  },
-};
 
 const CREDIT_RESET_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_CREDIT_UPDATE_ATTEMPTS = 3;
@@ -51,8 +33,7 @@ function extractEmbedding(result: EmbeddingResponse) {
 }
 
 function resolveCreditState(profile: CreditProfile, now: Date) {
-  const tier = (profile.tier || "free") as keyof typeof TIER_CONFIG;
-  const limit = TIER_CONFIG[tier].credits;
+  const { tier, credits: limit } = getTierConfig(profile.tier);
   const currentUsage =
     typeof profile.credits_used === "number" ? profile.credits_used : 0;
   const billingStartRaw = profile.billing_start_date;
@@ -167,8 +148,7 @@ async function checkNoteLimit(supabase: SupabaseClient, userId: string) {
     .eq("id", userId)
     .single();
 
-  const tier = (profile?.tier || "free") as keyof typeof TIER_CONFIG;
-  const limit = TIER_CONFIG[tier].notes;
+  const { tier, notes: limit } = getTierConfig(profile?.tier);
 
   if (limit === Infinity) return;
 
@@ -194,8 +174,7 @@ async function checkCharLimit(
     .eq("id", userId)
     .single();
 
-  const tier = (profile?.tier || "free") as keyof typeof TIER_CONFIG;
-  const limit = TIER_CONFIG[tier].maxChars;
+  const { tier, maxChars: limit } = getTierConfig(profile?.tier);
 
   if (content.length > limit) {
     throw new Error(`Note too long! ${tier} limit is ${limit} characters.`);

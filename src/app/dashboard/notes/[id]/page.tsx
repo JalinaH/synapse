@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NotePageContent } from "@/components/notes/note-page-content";
+import { getTierConfig } from "@/lib/tiers";
 
 interface RelatedNote {
   id: string;
@@ -10,6 +11,16 @@ interface RelatedNote {
 export default async function NotePage({ params }: { params: { id: string } }) {
   const supabase = await createClient();
   const { id } = await params;
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const { data: profile } = user
+    ? await supabase.from("profiles").select("tier").eq("id", user.id).single()
+    : { data: null };
+
+  const { maxChars } = getTierConfig(profile?.tier);
 
   // 1. Fetch the Main Note
   const { data: note } = await supabase
@@ -39,5 +50,11 @@ export default async function NotePage({ params }: { params: { id: string } }) {
     (relatedNotes as RelatedNote[] | null)?.filter((n) => n.id !== note.id) ||
     [];
 
-  return <NotePageContent note={note} relatedNotes={filteredRelated} />;
+  return (
+    <NotePageContent
+      note={note}
+      relatedNotes={filteredRelated}
+      maxChars={maxChars}
+    />
+  );
 }

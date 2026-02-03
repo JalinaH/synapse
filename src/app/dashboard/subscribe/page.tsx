@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Check, Crown, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { TIER_CONFIG } from "@/lib/tiers";
 
 const plans = [
   {
@@ -8,7 +9,8 @@ const plans = [
     name: "Free",
     price: "$0",
     cadence: "month",
-    credits: "1,500",
+    credits: TIER_CONFIG.free.credits,
+    notes: TIER_CONFIG.free.notes,
     speed: "Standard",
     support: "Community",
     icon: Sparkles,
@@ -18,7 +20,8 @@ const plans = [
     name: "Pro",
     price: "$12",
     cadence: "month",
-    credits: "5,000",
+    credits: TIER_CONFIG.pro.credits,
+    notes: TIER_CONFIG.pro.notes,
     speed: "Fast",
     support: "Priority",
     icon: Zap,
@@ -28,7 +31,8 @@ const plans = [
     name: "Ultra",
     price: "$24",
     cadence: "month",
-    credits: "7,500",
+    credits: TIER_CONFIG.ultra.credits,
+    notes: TIER_CONFIG.ultra.notes,
     speed: "Fastest",
     support: "VIP",
     icon: Crown,
@@ -122,8 +126,8 @@ export default async function SubscribePage({
                       )}
                     </div>
                     <p className="mt-2 text-(--muted) text-sm">
-                      {plan.credits} credits · {plan.speed} AI · {plan.support}{" "}
-                      support
+                      {plan.credits.toLocaleString()} credits · {plan.speed} AI ·{" "}
+                      {plan.support} support
                     </p>
                   </div>
                   <div className="flex items-center gap-4">
@@ -154,7 +158,9 @@ export default async function SubscribePage({
                   </div>
                   <div className="flex items-center gap-2">
                     <Check size={14} className="text-emerald-500" />
-                    Unlimited notes
+                    {plan.notes === Infinity
+                      ? "Unlimited notes"
+                      : `${plan.notes.toLocaleString()} notes`}
                   </div>
                   <div className="flex items-center gap-2">
                     <Check size={14} className="text-emerald-500" />
@@ -187,7 +193,7 @@ export default async function SubscribePage({
             <div className="flex items-center justify-between text-sm">
               <span className="text-(--muted)">Included credits</span>
               <span className="font-semibold text-foreground">
-                {selectedPlan.credits}
+                {selectedPlan.credits.toLocaleString()}
               </span>
             </div>
           </div>
