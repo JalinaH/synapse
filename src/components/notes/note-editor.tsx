@@ -13,7 +13,13 @@ interface Note {
   created_at: string;
 }
 
-export function NoteEditor({ note }: { note: Note }) {
+export function NoteEditor({
+  note,
+  maxChars,
+}: {
+  note: Note;
+  maxChars: number;
+}) {
   const router = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [content, setContent] = useState(note.content);
@@ -26,8 +32,20 @@ export function NoteEditor({ note }: { note: Note }) {
   } | null>(null);
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const hasCharLimit = Number.isFinite(maxChars);
+  const charCount = content.length;
+  const overLimit = hasCharLimit && charCount > maxChars;
+  const remaining = hasCharLimit ? Math.max(maxChars - charCount, 0) : null;
 
   const handleSave = async () => {
+    if (overLimit) {
+      setStatus({
+        type: "error",
+        message: "Character limit exceeded. Shorten your note to save.",
+      });
+      return;
+    }
+
     setIsSaving(true);
     setStatus(null);
     const formData = new FormData();
@@ -116,8 +134,8 @@ export function NoteEditor({ note }: { note: Note }) {
               </button>
               <button
                 onClick={handleSave}
-                disabled={isSaving || isDeleting}
-                className={`px-4 py-2 text-sm rounded-xl font-semibold transition-all flex items-center gap-2 shadow-lg ${
+                disabled={isSaving || isDeleting || overLimit}
+                className={`px-4 py-2 text-sm rounded-xl font-semibold transition-all flex items-center gap-2 shadow-lg disabled:opacity-60 disabled:cursor-not-allowed ${
                   isDark
                     ? "bg-white text-black hover:bg-gray-100 shadow-black/30"
                     : "bg-black text-white hover:bg-gray-900 shadow-gray-300/60"
@@ -227,23 +245,60 @@ export function NoteEditor({ note }: { note: Note }) {
       )}
 
       {/* Editor / Viewer Area */}
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="flex-1 overflow-y-auto">
         {isEditing ? (
-          <textarea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            className={`w-full h-full resize-none outline-none text-lg leading-relaxed font-mono bg-transparent ${
-              isDark
-                ? "text-gray-100 placeholder:text-gray-600"
-                : "text-gray-800 placeholder:text-gray-400"
-            }`}
-            placeholder="Start typing..."
-            autoFocus
-          />
+          <div className="flex h-full flex-col">
+            <textarea
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              className={`w-full flex-1 resize-none outline-none text-lg leading-relaxed font-mono bg-transparent p-8 ${
+                isDark
+                  ? "text-gray-100 placeholder:text-gray-600"
+                  : "text-gray-800 placeholder:text-gray-400"
+              }`}
+              placeholder="Start typing..."
+              autoFocus
+            />
+            <div className="px-8 pb-6 pt-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className={isDark ? "text-gray-400" : "text-gray-500"}>
+                  Character count
+                </span>
+                <span
+                  className={
+                    overLimit
+                      ? "text-red-500 font-semibold"
+                      : isDark
+                        ? "text-gray-300"
+                        : "text-gray-600"
+                  }
+                >
+                  {hasCharLimit
+                    ? `${charCount.toLocaleString()} / ${maxChars.toLocaleString()}`
+                    : charCount.toLocaleString()}
+                </span>
+              </div>
+              {hasCharLimit && (
+                <p
+                  className={`mt-1 text-[11px] ${
+                    overLimit
+                      ? "text-red-500"
+                      : isDark
+                        ? "text-gray-500"
+                        : "text-gray-400"
+                  }`}
+                >
+                  {overLimit
+                    ? "Limit exceeded. Shorten to save."
+                    : `${remaining?.toLocaleString()} characters left`}
+                </p>
+              )}
+            </div>
+          </div>
         ) : (
           // Tailwind Typography (prose) makes the markdown look great automatically
           <article
-            className={`prose prose-lg max-w-none prose-headings:font-bold ${
+            className={`prose prose-lg max-w-none prose-headings:font-bold p-8 ${
               isDark
                 ? "prose-invert prose-a:text-blue-400"
                 : "prose-a:text-blue-600"

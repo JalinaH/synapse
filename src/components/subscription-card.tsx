@@ -1,21 +1,23 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { Zap, Crown } from "lucide-react";
+import { getTierConfig, type TierName } from "@/lib/tiers";
 
 interface Props {
-  tier: "free" | "pro" | "ultra";
+  tier: TierName;
   usage: number;
 }
 
 export function SubscriptionCard({ tier = "free", usage = 0 }: Props) {
-  const limits = { free: 1500, pro: 5000, ultra: 7500 };
-  const limit = limits[tier] || 1500;
-  const percentage = Math.min((usage / limit) * 100, 100);
-  const remaining = limit - usage;
+  const router = useRouter();
+  const { credits: limit } = getTierConfig(tier);
+  const safeLimit = Number.isFinite(limit) ? limit : usage || 1;
+  const percentage = Math.min((usage / safeLimit) * 100, 100);
+  const remaining = Math.max(safeLimit - usage, 0);
 
   const handleUpgrade = (plan: string) => {
-    // In the future, this calls your Stripe Checkout Server Action
-    alert(`Redirecting to Stripe to upgrade to ${plan}...`);
+    router.push(`/dashboard/subscribe?plan=${plan}`);
   };
 
   return (
@@ -43,7 +45,7 @@ export function SubscriptionCard({ tier = "free", usage = 0 }: Props) {
             </span>
             <span className="text-(--muted) text-sm">
               {" "}
-              / {limit.toLocaleString()}
+              / {Number.isFinite(limit) ? limit.toLocaleString() : "Unlimited"}
             </span>
           </div>
         </div>
@@ -67,7 +69,9 @@ export function SubscriptionCard({ tier = "free", usage = 0 }: Props) {
                 : "text-(--muted)"
             }
           >
-            {remaining.toLocaleString()} credits left
+            {Number.isFinite(limit)
+              ? `${remaining.toLocaleString()} credits left`
+              : "Unlimited credits"}
           </span>
         </div>
       </div>
@@ -93,7 +97,7 @@ export function SubscriptionCard({ tier = "free", usage = 0 }: Props) {
               onClick={() => handleUpgrade("ultra")}
               className="py-2 px-3 text-xs font-bold rounded-lg bg-foreground text-background hover:opacity-90 transition"
             >
-              Ultra (7.5k)
+              Ultra (10k)
             </button>
           </div>
         </div>

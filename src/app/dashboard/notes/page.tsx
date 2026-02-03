@@ -1,15 +1,32 @@
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { Plus, Calendar, ArrowRight } from "lucide-react";
+import { getTierConfig } from "@/lib/tiers";
 
 export default async function NotesLibraryPage() {
   const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const { data: profile } = user
+    ? await supabase.from("profiles").select("tier").eq("id", user.id).single()
+    : { data: null };
 
   // Fetch all notes, newest first
   const { data: notes } = await supabase
     .from("notes")
     .select("*")
     .order("created_at", { ascending: false });
+
+  const notesCount = notes?.length || 0;
+  const { notes: notesLimit } = getTierConfig(profile?.tier);
+  const hasNoteLimit = Number.isFinite(notesLimit);
+  const isAtLimit = hasNoteLimit && notesCount >= notesLimit;
+  const notesUsageLabel = hasNoteLimit
+    ? `${notesCount.toLocaleString()} of ${notesLimit.toLocaleString()} memories used`
+    : `${notesCount.toLocaleString()} memories stored`;
 
   return (
     <div className="max-w-6xl mx-auto p-8">
@@ -19,16 +36,25 @@ export default async function NotesLibraryPage() {
           <h1 className="text-3xl font-bold tracking-tight text-foreground">
             My Library
           </h1>
-          <p className="text-muted mt-1">
-            {notes?.length || 0} memories stored
-          </p>
+          <p className="text-muted mt-1">{notesUsageLabel}</p>
+          {isAtLimit && (
+            <p className="text-xs text-red-500 mt-1">
+              Note limit reached. Upgrade to add more notes.
+            </p>
+          )}
         </div>
-        <Link
-          href="/dashboard"
-          className="bg-foreground text-background px-4 py-2 rounded-lg flex items-center gap-2 hover:opacity-90 transition"
-        >
-          <Plus size={18} /> New Note
-        </Link>
+        {isAtLimit ? (
+          <div className="bg-surface text-muted px-4 py-2 rounded-lg flex items-center gap-2 cursor-not-allowed border border-border">
+            <Plus size={18} /> Note limit reached
+          </div>
+        ) : (
+          <Link
+            href="/dashboard"
+            className="bg-foreground text-background px-4 py-2 rounded-lg flex items-center gap-2 hover:opacity-90 transition"
+          >
+            <Plus size={18} /> New Note
+          </Link>
+        )}
       </div>
 
       {/* Grid of Notes */}
