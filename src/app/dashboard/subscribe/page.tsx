@@ -42,9 +42,10 @@ const plans = [
 export default async function SubscribePage({
   searchParams,
 }: {
-  searchParams?: { plan?: string };
+  searchParams?: Promise<{ plan?: string }>;
 }) {
   const supabase = await createClient();
+  const resolvedSearchParams = await searchParams;
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -75,7 +76,9 @@ export default async function SubscribePage({
     .single();
 
   const currentPlan = (profile?.tier || "free") as (typeof plans)[number]["id"];
-  const selectedPlan = (plans.find((plan) => plan.id === searchParams?.plan) ||
+  const selectedPlan = (plans.find(
+    (plan) => plan.id === resolvedSearchParams?.plan,
+  ) ||
     plans.find((plan) => plan.id === currentPlan) ||
     plans[1]) as (typeof plans)[number];
 

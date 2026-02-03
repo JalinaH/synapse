@@ -14,6 +14,12 @@ const genAI = new GoogleGenAI({
 
 const CREDIT_RESET_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_CREDIT_UPDATE_ATTEMPTS = 3;
+const MAX_SUMMARY_CONTEXT_CHARS = 20000;
+const MAX_SUMMARY_NOTES = 100;
+const MAX_SYNTHESIS_CONTEXT_CHARS = 20000;
+const MAX_SYNTHESIS_NOTES = 40;
+const SYNTHESIS_MATCH_COUNT = 15;
+const SYNTHESIS_MATCH_THRESHOLD = 0.2;
 
 // --- HELPER FUNCTIONS ---
 
@@ -57,6 +63,78 @@ function resolveCreditState(profile: CreditProfile, now: Date) {
     normalizedUsage,
     nextBillingStart,
   };
+}
+
+function isSummaryRequest(question: string) {
+  const normalized = question.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes("summarize") ||
+    normalized.includes("summary") ||
+    normalized.includes("recap") ||
+    normalized.includes("overview") ||
+    normalized.includes("all notes") ||
+    normalized.includes("my notes") ||
+    normalized.includes("everything")
+  );
+}
+
+function isSynthesisRequest(question: string) {
+  const normalized = question.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes("plan") ||
+    normalized.includes("roadmap") ||
+    normalized.includes("strategy") ||
+    normalized.includes("combine") ||
+    normalized.includes("synthesize") ||
+    normalized.includes("based on my notes") ||
+    normalized.includes("from my notes") ||
+    normalized.includes("across my notes") ||
+    normalized.includes("overall") ||
+    normalized.includes("diet") ||
+    normalized.includes("meal")
+  );
+}
+
+function buildSummaryContext(
+  notes: { content: string }[],
+  maxChars: number,
+) {
+  let total = 0;
+  const chunks: string[] = [];
+
+  for (const note of notes) {
+    if (!note.content) continue;
+    const next = note.content.trim();
+    if (!next) continue;
+    if (total + next.length > maxChars) break;
+    chunks.push(next);
+    total += next.length;
+  }
+
+  return chunks.join("\n---\n");
+}
+
+function mergeNotesById<T extends { id?: string | null }>(...lists: T[][]) {
+  const map = new Map<string, T>();
+  const merged: T[] = [];
+
+  for (const list of lists) {
+    for (const item of list) {
+      const key = item.id || "";
+      if (!key) {
+        merged.push(item);
+        continue;
+      }
+      if (!map.has(key)) {
+        map.set(key, item);
+        merged.push(item);
+      }
+    }
+  }
+
+  return merged;
 }
 
 async function assertCreditsAvailable(
@@ -329,6 +407,115 @@ export async function chatWithBrain(
   try {
     // 1. Pre-check credit availability before embedding
     await assertCreditsAvailable(supabase, user.id);
+
+    const wantsSummary = isSummaryRequest(userQuestion);
+    const wantsSynthesis = !wantsSummary && isSynthesisRequest(userQuestion);
+
+    if (wantsSummary) {
+      const { data: notes, error } = await supabase
+        .from("notes")
+        .select("id, content, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(MAX_SUMMARY_NOTES);
+
+      if (error) throw new Error(error.message);
+
+      if (!notes || notes.length === 0) {
+        return { answer: "You don't have any notes to summarize yet.", sources: [] };
+      }
+
+      const contextText = buildSummaryContext(notes, MAX_SUMMARY_CONTEXT_CHARS);
+
+      if (!contextText) {
+        return { answer: "I couldn't find any note content to summarize.", sources: [] };
+      }
+
+      // Deduct Credit (Chatting costs money!)
+      await checkCredits(supabase, user.id);
+
+      const response = await genAI.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `
+        You are a Second Brain AI. Summarize the user's notes clearly and concisely.
+        Provide a short overview and then 3-6 bullet points of key themes.
+        NOTES: ${contextText}
+        `,
+      });
+
+      return { answer: response.text || "", sources: notes };
+    }
+
+    if (wantsSynthesis) {
+      let relatedNotes: { id: string; content: string; similarity?: number }[] =
+        [];
+
+      try {
+        const result = await genAI.models.embedContent({
+          model: "text-embedding-004",
+          contents: userQuestion,
+          config: { outputDimensionality: 768 },
+        });
+
+        const vector = extractEmbedding(result);
+
+        if (vector) {
+          const { data } = await supabase.rpc("match_notes", {
+            query_embedding: vector,
+            match_threshold: SYNTHESIS_MATCH_THRESHOLD,
+            match_count: SYNTHESIS_MATCH_COUNT,
+          });
+
+          relatedNotes =
+            (data as { id: string; content: string; similarity?: number }[]) ||
+            [];
+        }
+      } catch (error) {
+        console.error("Synthesis embedding error:", error);
+      }
+
+      const { data: recentNotes, error: recentError } = await supabase
+        .from("notes")
+        .select("id, content, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(MAX_SYNTHESIS_NOTES);
+
+      if (recentError) throw new Error(recentError.message);
+
+      const mergedNotes = mergeNotesById(
+        relatedNotes,
+        (recentNotes as { id: string; content: string }[]) || [],
+      );
+
+      if (!mergedNotes.length) {
+        return { answer: "You don't have any notes to use yet.", sources: [] };
+      }
+
+      const contextText = buildSummaryContext(
+        mergedNotes,
+        MAX_SYNTHESIS_CONTEXT_CHARS,
+      );
+
+      if (!contextText) {
+        return { answer: "I couldn't build a context from your notes.", sources: [] };
+      }
+
+      // Deduct Credit (Chatting costs money!)
+      await checkCredits(supabase, user.id);
+
+      const response = await genAI.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `
+        You are a Second Brain AI. Use the notes below to synthesize an answer.
+        If the user asks for a plan, propose a concise, practical plan.
+        NOTES: ${contextText}
+        QUESTION: ${userQuestion}
+        `,
+      });
+
+      return { answer: response.text || "", sources: mergedNotes };
+    }
 
     // 2. Embed Question
     const result = await genAI.models.embedContent({
