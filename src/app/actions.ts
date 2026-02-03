@@ -30,6 +30,9 @@ const TIER_CONFIG = {
   },
 };
 
+const CREDIT_RESET_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_CREDIT_UPDATE_ATTEMPTS = 3;
+
 // --- HELPER FUNCTIONS ---
 
 type EmbeddingResponse = {
@@ -37,54 +40,123 @@ type EmbeddingResponse = {
   embeddings?: { values?: number[] }[];
 };
 
+type CreditProfile = {
+  tier?: string | null;
+  credits_used?: number | null;
+  billing_start_date?: string | null;
+};
+
 function extractEmbedding(result: EmbeddingResponse) {
   return result.embedding?.values || result.embeddings?.[0]?.values;
 }
 
-// Check 1: Monthly AI Credits
-async function checkCredits(supabase: SupabaseClient, userId: string) {
-  const { data: profile } = await supabase
+function resolveCreditState(profile: CreditProfile, now: Date) {
+  const tier = (profile.tier || "free") as keyof typeof TIER_CONFIG;
+  const limit = TIER_CONFIG[tier].credits;
+  const currentUsage =
+    typeof profile.credits_used === "number" ? profile.credits_used : 0;
+  const billingStartRaw = profile.billing_start_date;
+  const billingStartDate = billingStartRaw ? new Date(billingStartRaw) : null;
+  const hasValidBillingStart =
+    billingStartDate && !Number.isNaN(billingStartDate.getTime());
+  const isNewCycle =
+    !hasValidBillingStart ||
+    now.getTime() - billingStartDate.getTime() > CREDIT_RESET_MS;
+  const normalizedUsage = isNewCycle ? 0 : currentUsage;
+  const nextBillingStart = isNewCycle
+    ? now.toISOString()
+    : billingStartRaw || now.toISOString();
+
+  return {
+    tier,
+    limit,
+    currentUsage,
+    billingStartRaw,
+    isNewCycle,
+    normalizedUsage,
+    nextBillingStart,
+  };
+}
+
+async function assertCreditsAvailable(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  const { data: profile, error } = await supabase
     .from("profiles")
     .select("tier, credits_used, billing_start_date")
     .eq("id", userId)
     .single();
 
+  if (error) throw new Error(error.message);
   if (!profile) throw new Error("Profile not found");
 
-  // Check for Monthly Reset (30 days)
-  const now = new Date();
-  const startDate = new Date(profile.billing_start_date);
-  const isNewCycle =
-    now.getTime() - startDate.getTime() > 30 * 24 * 60 * 60 * 1000;
+  const { limit, normalizedUsage } = resolveCreditState(profile, new Date());
 
-  let currentUsage = profile.credits_used;
-
-  if (isNewCycle) {
-    currentUsage = 0;
-    await supabase
-      .from("profiles")
-      .update({
-        credits_used: 0,
-        billing_start_date: now.toISOString(),
-      })
-      .eq("id", userId);
-  }
-
-  // Check Limit
-  const tier = (profile.tier || "free") as keyof typeof TIER_CONFIG;
-  const limit = TIER_CONFIG[tier].credits;
-
-  if (currentUsage >= limit) {
+  if (normalizedUsage >= limit) {
     throw new Error(
       `Monthly AI credit limit (${limit}) reached. Upgrade plan.`,
     );
   }
+}
 
-  // Increment Usage
-  await supabase
-    .from("profiles")
-    .update({ credits_used: currentUsage + 1 })
-    .eq("id", userId);
+// Check 1: Monthly AI Credits
+async function checkCredits(supabase: SupabaseClient, userId: string) {
+  const now = new Date();
+
+  for (let attempt = 0; attempt < MAX_CREDIT_UPDATE_ATTEMPTS; attempt += 1) {
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("tier, credits_used, billing_start_date")
+      .eq("id", userId)
+      .single();
+
+    if (error) throw new Error(error.message);
+    if (!profile) throw new Error("Profile not found");
+
+    const {
+      limit,
+      currentUsage,
+      billingStartRaw,
+      isNewCycle,
+      normalizedUsage,
+      nextBillingStart,
+    } = resolveCreditState(profile, now);
+
+    if (normalizedUsage >= limit) {
+      throw new Error(
+        `Monthly AI credit limit (${limit}) reached. Upgrade plan.`,
+      );
+    }
+
+    // Optimistic update to reduce concurrent double-charges.
+    let updateQuery = supabase
+      .from("profiles")
+      .update({
+        credits_used: normalizedUsage + 1,
+        billing_start_date: nextBillingStart,
+      })
+      .eq("id", userId);
+
+    if (profile.credits_used === null || profile.credits_used === undefined) {
+      updateQuery = updateQuery.is("credits_used", null);
+    } else {
+      updateQuery = updateQuery.eq("credits_used", currentUsage);
+    }
+
+    if (!isNewCycle && billingStartRaw) {
+      updateQuery = updateQuery.eq("billing_start_date", billingStartRaw);
+    }
+
+    const { data: updatedRows, error: updateError } = await updateQuery.select(
+      "credits_used",
+    );
+
+    if (updateError) throw new Error(updateError.message);
+    if (updatedRows && updatedRows.length > 0) return;
+  }
+
+  throw new Error("Unable to update credits. Please retry.");
 }
 
 // Check 2: Storage Limit
@@ -148,7 +220,7 @@ export async function addNote(formData: FormData) {
     // Perform checks inside try/catch so errors return nicely
     await checkNoteLimit(supabase, user.id);
     await checkCharLimit(supabase, user.id, content);
-    await checkCredits(supabase, user.id); // Deduct credit for embedding
+    await assertCreditsAvailable(supabase, user.id);
 
     // Generate Embedding
     const result = await genAI.models.embedContent({
@@ -159,6 +231,8 @@ export async function addNote(formData: FormData) {
 
     const vector = extractEmbedding(result);
     if (!vector) return { error: "Failed to generate embedding" };
+
+    await checkCredits(supabase, user.id); // Deduct credit after embed success
 
     // Save to DB
     const { error } = await supabase.from("notes").insert({
@@ -230,8 +304,8 @@ export async function updateNote(formData: FormData) {
       .single();
     if (!note || note.user_id !== user.id) return { error: "Unauthorized" };
 
-    // 3. Deduct Credit (Re-embedding costs money!)
-    await checkCredits(supabase, user.id);
+    // 3. Pre-check credit availability before embedding
+    await assertCreditsAvailable(supabase, user.id);
 
     // 4. Generate NEW Embedding
     const result = await genAI.models.embedContent({
@@ -243,7 +317,10 @@ export async function updateNote(formData: FormData) {
     const vector = extractEmbedding(result);
     if (!vector) return { error: "Failed to generate embedding" };
 
-    // 5. Update DB
+    // 5. Deduct Credit (Re-embedding costs money!)
+    await checkCredits(supabase, user.id);
+
+    // 6. Update DB
     const { error } = await supabase
       .from("notes")
       .update({ content, embedding: vector })
@@ -271,8 +348,8 @@ export async function chatWithBrain(
   if (!user) return { answer: "Please log in.", sources: [] };
 
   try {
-    // 1. Deduct Credit (Chatting costs money!)
-    await checkCredits(supabase, user.id);
+    // 1. Pre-check credit availability before embedding
+    await assertCreditsAvailable(supabase, user.id);
 
     // 2. Embed Question
     const result = await genAI.models.embedContent({
@@ -282,8 +359,14 @@ export async function chatWithBrain(
     });
 
     const vector = extractEmbedding(result);
+    if (!vector) {
+      return { answer: "Failed to generate embedding.", sources: [] };
+    }
 
-    // 3. Find relevant notes
+    // 3. Deduct Credit (Chatting costs money!)
+    await checkCredits(supabase, user.id);
+
+    // 4. Find relevant notes
     const { data: relatedNotes, error } = await supabase.rpc("match_notes", {
       query_embedding: vector,
       match_threshold: 0.3,
@@ -292,14 +375,14 @@ export async function chatWithBrain(
 
     if (error) throw new Error("Database error");
 
-    // 4. Construct Context
+    // 5. Construct Context
     type RelatedNote = { content: string };
     const contextText =
       (relatedNotes as RelatedNote[] | null | undefined)
         ?.map((n) => n.content)
         .join("\n---\n") || "No notes found.";
 
-    // 5. Generate Answer (FIXED MODEL NAME)
+    // 6. Generate Answer (FIXED MODEL NAME)
     const response = await genAI.models.generateContent({
       model: "gemini-2.5-flash",
       contents: `
@@ -322,9 +405,28 @@ export async function chatWithBrain(
 // 5. Delete Note
 export async function deleteNote(formData: FormData) {
   const noteId = formData.get("noteId") as string;
+  if (!noteId) return { error: "Missing note id" };
   const supabase = await createClient();
 
-  const { error } = await supabase.from("notes").delete().eq("id", noteId);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return { error: "Unauthorized" };
+
+  const { data: note } = await supabase
+    .from("notes")
+    .select("user_id")
+    .eq("id", noteId)
+    .single();
+
+  if (!note || note.user_id !== user.id) return { error: "Unauthorized" };
+
+  const { error } = await supabase
+    .from("notes")
+    .delete()
+    .eq("id", noteId)
+    .eq("user_id", user.id);
 
   if (error) return { error: error.message };
   revalidatePath("/dashboard/notes");
@@ -388,13 +490,23 @@ export async function updateProfile(formData: FormData) {
 
 // Dev-Only Upgrade Action
 export async function upgradeTier(formData: FormData) {
+  if (process.env.NODE_ENV === "production") {
+    return { error: "Tier upgrades are disabled in production." };
+  }
+
   const newTier = formData.get("tier") as string;
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return;
+  if (!user) return { error: "Unauthorized" };
 
-  await supabase.from("profiles").update({ tier: newTier }).eq("id", user.id);
+  const { error } = await supabase
+    .from("profiles")
+    .update({ tier: newTier })
+    .eq("id", user.id);
+
+  if (error) return { error: error.message };
   revalidatePath("/dashboard/profile");
+  return { success: true };
 }
