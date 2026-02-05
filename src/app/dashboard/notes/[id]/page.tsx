@@ -1,11 +1,26 @@
 import { createClient } from "@/lib/supabase/server";
 import { NotePageContent } from "@/components/notes/note-page-content";
 import { getTierConfig } from "@/lib/tiers";
+import { redirect } from "next/navigation";
 
 interface RelatedNote {
   id: string;
   content: string;
   similarity: number;
+}
+
+interface LinkNote {
+  id: string;
+  content: string;
+  created_at: string;
+}
+
+function extractLinkedIds(content: string) {
+  const matches = content.match(/\[\[([^\]]+)\]\]/g) || [];
+  const ids = matches
+    .map((match) => match.replace("[[", "").replace("]]", "").trim())
+    .filter(Boolean);
+  return Array.from(new Set(ids));
 }
 
 export default async function NotePage({ params }: { params: { id: string } }) {
@@ -15,6 +30,10 @@ export default async function NotePage({ params }: { params: { id: string } }) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/auth/login");
+  }
 
   const { data: profile } = user
     ? await supabase.from("profiles").select("tier").eq("id", user.id).single()
@@ -37,6 +56,28 @@ export default async function NotePage({ params }: { params: { id: string } }) {
     );
   }
 
+  const outgoingIds = extractLinkedIds(note.content || "");
+  const { data: outgoingLinks } =
+    outgoingIds.length > 0
+      ? await supabase
+          .from("notes")
+          .select("id, content, created_at")
+          .eq("user_id", user.id)
+          .in("id", outgoingIds)
+      : { data: [] };
+
+  const { data: backlinkCandidates } = await supabase
+    .from("notes")
+    .select("id, content, created_at")
+    .eq("user_id", user.id)
+    .ilike("content", `%[[${id}]]%`);
+
+  const backlinks =
+    (backlinkCandidates as LinkNote[] | null)?.filter((candidate) => {
+      const ids = extractLinkedIds(candidate.content || "");
+      return ids.includes(id);
+    }) || [];
+
   // 2. Find Related Notes (The AI "Second Brain" Magic)
   // We use the embedding of the CURRENT note to find others like it
   const { data: relatedNotes } = await supabase.rpc("match_notes", {
@@ -54,6 +95,8 @@ export default async function NotePage({ params }: { params: { id: string } }) {
     <NotePageContent
       note={note}
       relatedNotes={filteredRelated}
+      outgoingLinks={(outgoingLinks as LinkNote[] | null) || []}
+      backlinks={backlinks}
       maxChars={maxChars}
     />
   );

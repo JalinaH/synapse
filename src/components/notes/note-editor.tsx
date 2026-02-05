@@ -1,11 +1,17 @@
 "use client";
 
-import { useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { deleteNote, updateNote } from "@/app/actions";
 import Markdown from "react-markdown"; // The markdown renderer
 import { Edit2, Save, X, FileText, Trash2 } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
+import {
+  LinkAutocomplete,
+  getActiveMention,
+  useNoteLinkCandidates,
+} from "@/components/notes/link-autocomplete";
+import { getCaretPosition } from "@/components/notes/textarea-caret";
 
 interface Note {
   id: string;
@@ -26,6 +32,13 @@ export function NoteEditor({
   const [content, setContent] = useState(note.content);
   const [tags, setTags] = useState<string[]>(note.tags ?? []);
   const [tagInput, setTagInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaWrapperRef = useRef<HTMLDivElement>(null);
+  const [cursor, setCursor] = useState(0);
+  const [mentionPosition, setMentionPosition] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -35,6 +48,41 @@ export function NoteEditor({
   } | null>(null);
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const linkCandidates = useNoteLinkCandidates(note.id);
+  const activeMention = isEditing ? getActiveMention(content, cursor) : null;
+
+  function updateMentionPosition(value: string, selection: number) {
+    const mention = getActiveMention(value, selection);
+    if (
+      !mention ||
+      !textareaRef.current ||
+      !textareaWrapperRef.current
+    ) {
+      setMentionPosition(null);
+      return;
+    }
+
+    const caret = getCaretPosition(textareaRef.current, selection, value);
+    if (!caret) return;
+
+    const textareaRect = textareaRef.current.getBoundingClientRect();
+    const wrapperRect = textareaWrapperRef.current.getBoundingClientRect();
+    const offsetTop = textareaRect.top - wrapperRect.top;
+    const offsetLeft = textareaRect.left - wrapperRect.left;
+
+    const panelWidth = 320;
+    const maxLeft =
+      textareaWrapperRef.current.clientWidth - panelWidth - 16;
+    const clampedLeft = Math.max(
+      8,
+      Math.min(offsetLeft + caret.left, maxLeft),
+    );
+
+    setMentionPosition({
+      top: offsetTop + caret.top + caret.lineHeight + 8,
+      left: clampedLeft,
+    });
+  }
   const hasCharLimit = Number.isFinite(maxChars);
   const charCount = content.length;
   const overLimit = hasCharLimit && charCount > maxChars;
@@ -70,6 +118,24 @@ export function NoteEditor({
       event.preventDefault();
       setTags((current) => current.slice(0, -1));
     }
+  }
+
+  function insertLink(noteId: string) {
+    if (!activeMention) return;
+    const before = content.slice(0, activeMention.start);
+    const after = content.slice(cursor);
+    const next = `${before}[[${noteId}]]${after}`;
+    const nextCursor = before.length + noteId.length + 4;
+    setContent(next);
+    setCursor(nextCursor);
+    updateMentionPosition(next, nextCursor);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    });
   }
 
   const handleSave = async () => {
@@ -334,17 +400,61 @@ export function NoteEditor({
       <div className="flex-1 overflow-y-auto">
         {isEditing ? (
           <div className="flex h-full flex-col">
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className={`w-full flex-1 resize-none outline-none text-lg leading-relaxed font-mono bg-transparent p-8 ${
-                isDark
-                  ? "text-gray-100 placeholder:text-gray-600"
-                  : "text-gray-800 placeholder:text-gray-400"
-              }`}
-              placeholder="Start typing..."
-              autoFocus
-            />
+            <div className="relative flex-1" ref={textareaWrapperRef}>
+              <textarea
+                value={content}
+                ref={textareaRef}
+                onChange={(event) => {
+                  setContent(event.target.value);
+                  setCursor(event.target.selectionStart);
+                  updateMentionPosition(
+                    event.target.value,
+                    event.target.selectionStart,
+                  );
+                }}
+                onClick={(event) => {
+                  setCursor(event.currentTarget.selectionStart);
+                  updateMentionPosition(
+                    event.currentTarget.value,
+                    event.currentTarget.selectionStart,
+                  );
+                }}
+                onKeyUp={(event) => {
+                  setCursor(event.currentTarget.selectionStart);
+                  updateMentionPosition(
+                    event.currentTarget.value,
+                    event.currentTarget.selectionStart,
+                  );
+                }}
+                className={`w-full h-full resize-none outline-none text-lg leading-relaxed font-mono bg-transparent p-8 ${
+                  isDark
+                    ? "text-gray-100 placeholder:text-gray-600"
+                    : "text-gray-800 placeholder:text-gray-400"
+                }`}
+                placeholder="Start typing..."
+                autoFocus
+              />
+              <div className="px-8">
+                <LinkAutocomplete
+                  query={
+                    activeMention && mentionPosition
+                      ? activeMention.query
+                      : null
+                  }
+                  candidates={linkCandidates}
+                  onSelect={insertLink}
+                  className="absolute z-20 w-[320px]"
+                  style={
+                    mentionPosition
+                      ? {
+                          top: mentionPosition.top,
+                          left: mentionPosition.left,
+                        }
+                      : undefined
+                  }
+                />
+              </div>
+            </div>
             <div className="px-8 pb-6 pt-2">
               <div className="flex items-center justify-between text-xs">
                 <span className={isDark ? "text-gray-400" : "text-gray-500"}>

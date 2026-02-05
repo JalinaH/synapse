@@ -1,10 +1,16 @@
 "use client";
 
-import { useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { addNote, searchNotes } from "@/app/actions";
 import { useTheme } from "@/components/theme-provider";
 import { BookOpen, Plus, Search, Sparkles } from "lucide-react";
+import {
+  LinkAutocomplete,
+  getActiveMention,
+  useNoteLinkCandidates,
+} from "@/components/notes/link-autocomplete";
+import { getCaretPosition } from "@/components/notes/textarea-caret";
 
 interface Note {
   id: string;
@@ -66,6 +72,13 @@ export default function Dashboard() {
   const [pendingTemplate, setPendingTemplate] = useState<Template | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaWrapperRef = useRef<HTMLDivElement>(null);
+  const [cursor, setCursor] = useState(0);
+  const [mentionPosition, setMentionPosition] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const [searchResults, setSearchResults] = useState<Note[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
@@ -75,6 +88,37 @@ export default function Dashboard() {
   } | null>(null);
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const linkCandidates = useNoteLinkCandidates();
+  const activeMention = getActiveMention(draft, cursor);
+
+  function updateMentionPosition(value: string, selection: number) {
+    const mention = getActiveMention(value, selection);
+    if (!mention || !textareaRef.current || !textareaWrapperRef.current) {
+      setMentionPosition(null);
+      return;
+    }
+
+    const caret = getCaretPosition(textareaRef.current, selection, value);
+    if (!caret) return;
+
+    const textareaRect = textareaRef.current.getBoundingClientRect();
+    const wrapperRect = textareaWrapperRef.current.getBoundingClientRect();
+    const offsetTop = textareaRect.top - wrapperRect.top;
+    const offsetLeft = textareaRect.left - wrapperRect.left;
+
+    const panelWidth = 320;
+    const maxLeft =
+      textareaWrapperRef.current.clientWidth - panelWidth - 16;
+    const clampedLeft = Math.max(
+      8,
+      Math.min(offsetLeft + caret.left, maxLeft),
+    );
+
+    setMentionPosition({
+      top: offsetTop + caret.top + caret.lineHeight + 8,
+      left: clampedLeft,
+    });
+  }
 
   function normalizeTag(value: string) {
     return value
@@ -125,6 +169,24 @@ export default function Dashboard() {
       return `${current}${separator}${body}`;
     });
     setPendingTemplate(null);
+  }
+
+  function insertLink(noteId: string) {
+    if (!activeMention) return;
+    const before = draft.slice(0, activeMention.start);
+    const after = draft.slice(cursor);
+    const next = `${before}[[${noteId}]]${after}`;
+    const nextCursor = before.length + noteId.length + 4;
+    setDraft(next);
+    setCursor(nextCursor);
+    updateMentionPosition(next, nextCursor);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    });
   }
 
   async function handleSearch(formData: FormData) {
@@ -195,6 +257,7 @@ export default function Dashboard() {
             setDraft("");
             setTags([]);
             setTagInput("");
+            setMentionPosition(null);
           }}
         >
           <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -263,18 +326,58 @@ export default function Dashboard() {
             </div>
             <input type="hidden" name="tags" value={JSON.stringify(tags)} />
           </div>
-          <textarea
-            name="content"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            className={`w-full p-4 rounded-xl min-h-[220px] md:min-h-[280px] mb-4 border transition-colors resize-none ${
-              isDark
-                ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
-                : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
-            } outline-none`}
-            placeholder="What did you learn today?"
-            required
-          />
+          <div className="relative mb-4" ref={textareaWrapperRef}>
+            <textarea
+              name="content"
+              ref={textareaRef}
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setCursor(event.target.selectionStart);
+                updateMentionPosition(
+                  event.target.value,
+                  event.target.selectionStart,
+                );
+              }}
+              onClick={(event) => {
+                setCursor(event.currentTarget.selectionStart);
+                updateMentionPosition(
+                  event.currentTarget.value,
+                  event.currentTarget.selectionStart,
+                );
+              }}
+              onKeyUp={(event) => {
+                setCursor(event.currentTarget.selectionStart);
+                updateMentionPosition(
+                  event.currentTarget.value,
+                  event.currentTarget.selectionStart,
+                );
+              }}
+              className={`w-full p-4 rounded-xl min-h-[220px] md:min-h-[280px] border transition-colors resize-none ${
+                isDark
+                  ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
+                  : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+              } outline-none`}
+              placeholder="What did you learn today?"
+              required
+            />
+            <LinkAutocomplete
+              query={
+                activeMention && mentionPosition ? activeMention.query : null
+              }
+              candidates={linkCandidates}
+              onSelect={insertLink}
+              className="absolute z-20 w-[320px]"
+              style={
+                mentionPosition
+                  ? {
+                      top: mentionPosition.top,
+                      left: mentionPosition.left,
+                    }
+                  : undefined
+              }
+            />
+          </div>
           <button
             type="submit"
             className={`px-6 py-3 rounded-xl font-semibold transition-all hover:scale-[1.02] shadow-lg ${
