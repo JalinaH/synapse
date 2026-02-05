@@ -107,12 +107,8 @@ export default function Dashboard() {
     const offsetLeft = textareaRect.left - wrapperRect.left;
 
     const panelWidth = 320;
-    const maxLeft =
-      textareaWrapperRef.current.clientWidth - panelWidth - 16;
-    const clampedLeft = Math.max(
-      8,
-      Math.min(offsetLeft + caret.left, maxLeft),
-    );
+    const maxLeft = textareaWrapperRef.current.clientWidth - panelWidth - 16;
+    const clampedLeft = Math.max(8, Math.min(offsetLeft + caret.left, maxLeft));
 
     setMentionPosition({
       top: offsetTop + caret.top + caret.lineHeight + 8,
@@ -121,11 +117,7 @@ export default function Dashboard() {
   }
 
   function normalizeTag(value: string) {
-    return value
-      .trim()
-      .replace(/^#+/, "")
-      .replace(/\s+/g, "-")
-      .toLowerCase();
+    return value.trim().replace(/^#+/, "").replace(/\s+/g, "-").toLowerCase();
   }
 
   function addTag(value: string) {

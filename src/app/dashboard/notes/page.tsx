@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Plus, Calendar, ArrowRight } from "lucide-react";
 import { getTierConfig } from "@/lib/tiers";
 import { TagFilterBar } from "@/components/notes/tag-filter-bar";
+import { ImportExportPanel } from "@/components/notes/import-export-panel";
 
 function normalizeTag(value: string) {
   return value
@@ -91,6 +92,7 @@ export default async function NotesLibraryPage({
           {allTags.length > 0 && (
             <TagFilterBar allTags={allTags} selectedTags={selectedTags} />
           )}
+          <ImportExportPanel />
         </div>
         {isAtLimit ? (
           <div className="bg-surface text-muted px-4 py-2 rounded-lg flex items-center gap-2 cursor-not-allowed border border-border">
