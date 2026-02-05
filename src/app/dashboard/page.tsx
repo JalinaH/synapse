@@ -1,10 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { addNote, searchNotes } from "@/app/actions";
 import { useTheme } from "@/components/theme-provider";
 import { BookOpen, Plus, Search, Sparkles } from "lucide-react";
+import {
+  LinkAutocomplete,
+  getActiveMention,
+  useNoteLinkCandidates,
+} from "@/components/notes/link-autocomplete";
+import { getCaretPosition } from "@/components/notes/textarea-caret";
 
 interface Note {
   id: string;
@@ -12,18 +18,172 @@ interface Note {
   similarity: number;
 }
 
+interface Template {
+  id: string;
+  label: string;
+  body: string;
+}
+
 export default function Dashboard() {
+  const templates: Template[] = [
+    {
+      id: "daily-log",
+      label: "Daily Log",
+      body: `## Daily Log
+- Date:
+- Highlights:
+- Challenges:
+- Learnings:
+- Next steps:
+`,
+    },
+    {
+      id: "meeting-notes",
+      label: "Meeting Notes",
+      body: `## Meeting Notes
+- Attendees:
+- Agenda:
+- Decisions:
+- Action items:
+`,
+    },
+    {
+      id: "idea-capture",
+      label: "Idea Capture",
+      body: `## Idea
+- Summary:
+- Why it matters:
+- Next experiment:
+- References:
+`,
+    },
+    {
+      id: "reading-notes",
+      label: "Reading Notes",
+      body: `## Reading Notes
+- Source:
+- Key points:
+- Quotes:
+- Takeaways:
+`,
+    },
+  ];
+  const [draft, setDraft] = useState("");
+  const [pendingTemplate, setPendingTemplate] = useState<Template | null>(null);
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaWrapperRef = useRef<HTMLDivElement>(null);
+  const [cursor, setCursor] = useState(0);
+  const [mentionPosition, setMentionPosition] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const [searchResults, setSearchResults] = useState<Note[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
   const [modal, setModal] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const linkCandidates = useNoteLinkCandidates();
+  const activeMention = getActiveMention(draft, cursor);
+
+  function updateMentionPosition(value: string, selection: number) {
+    const mention = getActiveMention(value, selection);
+    if (!mention || !textareaRef.current || !textareaWrapperRef.current) {
+      setMentionPosition(null);
+      return;
+    }
+
+    const caret = getCaretPosition(textareaRef.current, selection, value);
+    if (!caret) return;
+
+    const textareaRect = textareaRef.current.getBoundingClientRect();
+    const wrapperRect = textareaWrapperRef.current.getBoundingClientRect();
+    const offsetTop = textareaRect.top - wrapperRect.top;
+    const offsetLeft = textareaRect.left - wrapperRect.left;
+
+    const panelWidth = 320;
+    const maxLeft = textareaWrapperRef.current.clientWidth - panelWidth - 16;
+    const clampedLeft = Math.max(8, Math.min(offsetLeft + caret.left, maxLeft));
+
+    setMentionPosition({
+      top: offsetTop + caret.top + caret.lineHeight + 8,
+      left: clampedLeft,
+    });
+  }
+
+  function normalizeTag(value: string) {
+    return value.trim().replace(/^#+/, "").replace(/\s+/g, "-").toLowerCase();
+  }
+
+  function addTag(value: string) {
+    const normalized = normalizeTag(value);
+    if (!normalized) return;
+    setTags((current) =>
+      current.includes(normalized) ? current : [...current, normalized],
+    );
+    setTagInput("");
+  }
+
+  function removeTag(tag: string) {
+    setTags((current) => current.filter((item) => item !== tag));
+  }
+
+  function handleTagKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter" || event.key === ",") {
+      event.preventDefault();
+      addTag(tagInput);
+    }
+    if (event.key === "Backspace" && tagInput.length === 0 && tags.length) {
+      event.preventDefault();
+      setTags((current) => current.slice(0, -1));
+    }
+  }
+
+  function handleTemplateClick(template: Template) {
+    if (draft.trim().length === 0) {
+      setDraft(template.body);
+      return;
+    }
+    setPendingTemplate(template);
+  }
+
+  function applyTemplate(body: string, mode: "replace" | "append") {
+    setDraft((current) => {
+      if (mode === "replace" || current.length === 0) {
+        return body;
+      }
+      const separator = current.endsWith("\n") ? "\n" : "\n\n";
+      return `${current}${separator}${body}`;
+    });
+    setPendingTemplate(null);
+  }
+
+  function insertLink(noteId: string) {
+    if (!activeMention) return;
+    const before = draft.slice(0, activeMention.start);
+    const after = draft.slice(cursor);
+    const next = `${before}[[${noteId}]]${after}`;
+    const nextCursor = before.length + noteId.length + 4;
+    setDraft(next);
+    setCursor(nextCursor);
+    updateMentionPosition(next, nextCursor);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    });
+  }
 
   async function handleSearch(formData: FormData) {
     setIsSearching(true);
+    setHasSearched(true);
     const query = formData.get("query") as string;
     const results = await searchNotes(query);
     setSearchResults(results);
@@ -86,18 +246,130 @@ export default function Dashboard() {
               return;
             }
             setModal({ type: "success", message: "Note saved to brain!" });
+            setDraft("");
+            setTags([]);
+            setTagInput("");
+            setMentionPosition(null);
           }}
         >
-          <textarea
-            name="content"
-            className={`w-full p-4 rounded-xl min-h-[120px] mb-4 border transition-colors resize-none ${
-              isDark
-                ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
-                : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
-            } outline-none`}
-            placeholder="What did you learn today?"
-            required
-          />
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <span
+              className={`text-xs font-semibold ${
+                isDark ? "text-gray-400" : "text-gray-500"
+              }`}
+            >
+              Templates
+            </span>
+            {templates.map((template) => (
+              <button
+                key={template.id}
+                type="button"
+                onClick={() => handleTemplateClick(template)}
+                className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                  isDark
+                    ? "bg-neutral-800 text-gray-200 hover:bg-neutral-700"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                {template.label}
+              </button>
+            ))}
+          </div>
+          <div className="mb-4">
+            <div className="flex flex-wrap items-center gap-2">
+              {tags.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => removeTag(tag)}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                    isDark
+                      ? "bg-neutral-800 text-gray-200 hover:bg-neutral-700"
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+                >
+                  #{tag} ✕
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                value={tagInput}
+                onChange={(event) => setTagInput(event.target.value)}
+                onKeyDown={handleTagKeyDown}
+                placeholder="Add tags (press Enter)..."
+                className={`flex-1 min-w-[200px] rounded-xl border px-4 py-2 text-sm transition-colors ${
+                  isDark
+                    ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-600 focus:border-neutral-600"
+                    : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+                } outline-none`}
+              />
+              <button
+                type="button"
+                onClick={() => addTag(tagInput)}
+                className={`rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
+                  isDark
+                    ? "bg-neutral-800 text-gray-200 hover:bg-neutral-700"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                Add tag
+              </button>
+            </div>
+            <input type="hidden" name="tags" value={JSON.stringify(tags)} />
+          </div>
+          <div className="relative mb-4" ref={textareaWrapperRef}>
+            <textarea
+              name="content"
+              ref={textareaRef}
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setCursor(event.target.selectionStart);
+                updateMentionPosition(
+                  event.target.value,
+                  event.target.selectionStart,
+                );
+              }}
+              onClick={(event) => {
+                setCursor(event.currentTarget.selectionStart);
+                updateMentionPosition(
+                  event.currentTarget.value,
+                  event.currentTarget.selectionStart,
+                );
+              }}
+              onKeyUp={(event) => {
+                setCursor(event.currentTarget.selectionStart);
+                updateMentionPosition(
+                  event.currentTarget.value,
+                  event.currentTarget.selectionStart,
+                );
+              }}
+              className={`w-full p-4 rounded-xl min-h-[220px] md:min-h-[280px] border transition-colors resize-none ${
+                isDark
+                  ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-500 focus:border-neutral-600"
+                  : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+              } outline-none`}
+              placeholder="What did you learn today?"
+              required
+            />
+            <LinkAutocomplete
+              query={
+                activeMention && mentionPosition ? activeMention.query : null
+              }
+              candidates={linkCandidates}
+              onSelect={insertLink}
+              className="absolute z-20 w-[320px]"
+              style={
+                mentionPosition
+                  ? {
+                      top: mentionPosition.top,
+                      left: mentionPosition.left,
+                    }
+                  : undefined
+              }
+            />
+          </div>
           <button
             type="submit"
             className={`px-6 py-3 rounded-xl font-semibold transition-all hover:scale-[1.02] shadow-lg ${
@@ -144,6 +416,71 @@ export default function Dashboard() {
               onClick={() => setModal(null)}
             >
               Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pendingTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setPendingTemplate(null)}
+          />
+          <div
+            className={`relative z-10 w-full max-w-sm rounded-2xl border p-6 shadow-2xl ${
+              isDark
+                ? "bg-neutral-900/95 border-neutral-800 text-gray-100"
+                : "bg-white/95 border-gray-200 text-gray-900"
+            }`}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              className={`mb-3 text-sm font-semibold ${
+                isDark ? "text-gray-200" : "text-gray-800"
+              }`}
+            >
+              Apply template
+            </div>
+            <p className="text-sm leading-relaxed text-muted">
+              You already have text in this note. Do you want to replace it or
+              append the template?
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                className={`flex-1 rounded-xl px-4 py-2 text-sm font-semibold transition-all ${
+                  isDark
+                    ? "bg-neutral-800 text-gray-100 hover:bg-neutral-700"
+                    : "bg-gray-100 text-gray-800 hover:bg-gray-200"
+                }`}
+                onClick={() => applyTemplate(pendingTemplate.body, "append")}
+              >
+                Append
+              </button>
+              <button
+                type="button"
+                className={`flex-1 rounded-xl px-4 py-2 text-sm font-semibold transition-all ${
+                  isDark
+                    ? "bg-white text-black hover:bg-gray-100"
+                    : "bg-black text-white hover:bg-gray-900"
+                }`}
+                onClick={() => applyTemplate(pendingTemplate.body, "replace")}
+              >
+                Replace
+              </button>
+            </div>
+            <button
+              type="button"
+              className={`mt-3 w-full rounded-xl px-4 py-2 text-sm font-semibold transition-all ${
+                isDark
+                  ? "text-gray-300 hover:bg-neutral-800"
+                  : "text-gray-600 hover:bg-gray-100"
+              }`}
+              onClick={() => setPendingTemplate(null)}
+            >
+              Cancel
             </button>
           </div>
         </div>
@@ -210,7 +547,7 @@ export default function Dashboard() {
             </div>
           </div>
         ))}
-        {searchResults.length === 0 && !isSearching && (
+        {hasSearched && searchResults.length === 0 && !isSearching && (
           <p className="text-gray-400 text-center italic">No memories found.</p>
         )}
       </div>

@@ -47,7 +47,7 @@ pnpm dev
 
 ## Supabase Setup (Expected)
 
-- `notes` table columns: `id`, `user_id`, `content`, `embedding` (vector length 768), `created_at`.
+- `notes` table columns: `id`, `user_id`, `content`, `embedding` (vector length 768), `tags` (text array), `created_at`.
 - `profiles` table columns: `id`, `first_name`, `last_name`, `email`, `tier`, `credits_used`, `billing_start_date`.
 - `match_notes` RPC params: `query_embedding`, `match_threshold`, `match_count`, returning `id`, `content`, `similarity`.
 - RLS policies should restrict `notes` and `profiles` rows to `auth.uid()`.

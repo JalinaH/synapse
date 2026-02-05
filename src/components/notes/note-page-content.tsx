@@ -9,6 +9,7 @@ interface Note {
   id: string;
   content: string;
   created_at: string;
+  tags?: string[] | null;
 }
 
 interface RelatedNote {
@@ -17,15 +18,25 @@ interface RelatedNote {
   similarity: number;
 }
 
+interface LinkNote {
+  id: string;
+  content: string;
+  created_at: string;
+}
+
 interface NotePageContentProps {
   note: Note;
   relatedNotes: RelatedNote[];
+  outgoingLinks: LinkNote[];
+  backlinks: LinkNote[];
   maxChars: number;
 }
 
 export function NotePageContent({
   note,
   relatedNotes,
+  outgoingLinks,
+  backlinks,
   maxChars,
 }: NotePageContentProps) {
   const { theme } = useTheme();
@@ -58,6 +69,90 @@ export function NotePageContent({
             : "bg-white/80 border-gray-100 shadow-gray-200/60"
         }`}
       >
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500 text-white flex items-center justify-center">
+              <ArrowLeft size={16} className="rotate-180" />
+            </div>
+            <span
+              className={`font-semibold ${
+                isDark ? "text-gray-100" : "text-gray-900"
+              }`}
+            >
+              Links
+            </span>
+          </div>
+          {outgoingLinks.length === 0 ? (
+            <p className={isDark ? "text-gray-500" : "text-gray-400"}>
+              No outgoing links yet.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {outgoingLinks.map((link) => (
+                <Link
+                  key={link.id}
+                  href={`/dashboard/notes/${link.id}`}
+                  className={`block p-4 rounded-xl border transition-all hover:scale-[1.02] ${
+                    isDark
+                      ? "bg-neutral-800 border-neutral-700 hover:border-emerald-500/50"
+                      : "bg-gray-50 border-gray-200 hover:border-emerald-500/50"
+                  }`}
+                >
+                  <p
+                    className={`text-sm line-clamp-3 font-medium ${
+                      isDark ? "text-gray-200" : "text-gray-800"
+                    }`}
+                  >
+                    {link.content}
+                  </p>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/15 text-emerald-500 flex items-center justify-center">
+              <ArrowLeft size={16} />
+            </div>
+            <span
+              className={`font-semibold ${
+                isDark ? "text-gray-100" : "text-gray-900"
+              }`}
+            >
+              Backlinks
+            </span>
+          </div>
+          {backlinks.length === 0 ? (
+            <p className={isDark ? "text-gray-500" : "text-gray-400"}>
+              No backlinks yet.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {backlinks.map((link) => (
+                <Link
+                  key={link.id}
+                  href={`/dashboard/notes/${link.id}`}
+                  className={`block p-4 rounded-xl border transition-all hover:scale-[1.02] ${
+                    isDark
+                      ? "bg-neutral-800 border-neutral-700 hover:border-emerald-500/50"
+                      : "bg-gray-50 border-gray-200 hover:border-emerald-500/50"
+                  }`}
+                >
+                  <p
+                    className={`text-sm line-clamp-3 font-medium ${
+                      isDark ? "text-gray-200" : "text-gray-800"
+                    }`}
+                  >
+                    {link.content}
+                  </p>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="flex items-center gap-2 mb-6">
           <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center">
             <Sparkles size={16} />

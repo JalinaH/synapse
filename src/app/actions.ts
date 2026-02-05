@@ -20,6 +20,7 @@ const MAX_SYNTHESIS_CONTEXT_CHARS = 20000;
 const MAX_SYNTHESIS_NOTES = 40;
 const SYNTHESIS_MATCH_COUNT = 15;
 const SYNTHESIS_MATCH_THRESHOLD = 0.2;
+const MAX_IMPORT_NOTES = 50;
 
 // --- HELPER FUNCTIONS ---
 
@@ -36,6 +37,19 @@ type CreditProfile = {
 
 function extractEmbedding(result: EmbeddingResponse) {
   return result.embedding?.values || result.embeddings?.[0]?.values;
+}
+
+function normalizeTagValue(tag: string) {
+  return tag
+    .trim()
+    .replace(/^#+/, "")
+    .replace(/\s+/g, "-")
+    .toLowerCase();
+}
+
+function normalizeTags(tags: string[]) {
+  const normalized = tags.map(normalizeTagValue).filter(Boolean);
+  return Array.from(new Set(normalized));
 }
 
 function resolveCreditState(profile: CreditProfile, now: Date) {
@@ -135,6 +149,27 @@ function mergeNotesById<T extends { id?: string | null }>(...lists: T[][]) {
   }
 
   return merged;
+}
+
+function parseTagsInput(raw: FormDataEntryValue | null) {
+  if (!raw || typeof raw !== "string") return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  let tags: string[] = [];
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) tags = parsed.filter(Boolean);
+    } catch {
+      tags = [];
+    }
+  } else {
+    tags = trimmed.split(",");
+  }
+
+  const normalized = tags.map((tag) => String(tag).trim()).filter(Boolean);
+  return normalizeTags(normalized);
 }
 
 async function assertCreditsAvailable(
@@ -265,6 +300,7 @@ async function checkCharLimit(
 export async function addNote(formData: FormData) {
   const content = formData.get("content") as string;
   if (!content) return { error: "Content is required" };
+  const tags = parseTagsInput(formData.get("tags"));
 
   const supabase = await createClient();
   const {
@@ -296,6 +332,7 @@ export async function addNote(formData: FormData) {
       user_id: user.id,
       content: content,
       embedding: vector,
+      tags,
     });
 
     if (error) throw new Error(error.message);
@@ -341,6 +378,7 @@ export async function updateNote(formData: FormData) {
   const noteId = formData.get("noteId") as string;
   const content = formData.get("content") as string;
   if (!noteId || !content) return { error: "Missing data" };
+  const tags = parseTagsInput(formData.get("tags"));
 
   const supabase = await createClient();
   const {
@@ -356,10 +394,25 @@ export async function updateNote(formData: FormData) {
     // 2. Ownership Check
     const { data: note } = await supabase
       .from("notes")
-      .select("user_id")
+      .select("user_id, content")
       .eq("id", noteId)
       .single();
     if (!note || note.user_id !== user.id) return { error: "Unauthorized" };
+
+    const contentChanged = note.content !== content;
+
+    if (!contentChanged) {
+      const { error } = await supabase
+        .from("notes")
+        .update({ tags })
+        .eq("id", noteId);
+
+      if (error) throw error;
+
+      revalidatePath(`/dashboard/notes/${noteId}`);
+      revalidatePath("/dashboard/notes");
+      return { success: true };
+    }
 
     // 3. Pre-check credit availability before embedding
     await assertCreditsAvailable(supabase, user.id);
@@ -380,7 +433,7 @@ export async function updateNote(formData: FormData) {
     // 6. Update DB
     const { error } = await supabase
       .from("notes")
-      .update({ content, embedding: vector })
+      .update({ content, embedding: vector, tags })
       .eq("id", noteId);
 
     if (error) throw error;
@@ -599,7 +652,158 @@ export async function deleteNote(formData: FormData) {
   return { success: true };
 }
 
-// 6. Auth Actions (Standard)
+// 6. Export Notes
+export async function exportNotes() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return { error: "Unauthorized" };
+
+  const { data, error } = await supabase
+    .from("notes")
+    .select("id, content, created_at, tags")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false });
+
+  if (error) return { error: error.message };
+  return { notes: data || [] };
+}
+
+// 7. Import Notes
+export async function importNotes(formData: FormData) {
+  const payload = formData.get("payload") as string;
+  if (!payload) return { error: "Missing payload" };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return { error: "Invalid JSON payload" };
+  }
+
+  const rawNotes = Array.isArray(parsed)
+    ? parsed
+    : (parsed as { notes?: unknown }).notes;
+
+  if (!Array.isArray(rawNotes)) {
+    return { error: "Payload must be an array of notes" };
+  }
+
+  if (rawNotes.length > MAX_IMPORT_NOTES) {
+    return {
+      error: `Import limit is ${MAX_IMPORT_NOTES} notes at a time.`,
+    };
+  }
+
+  const cleanedNotes = rawNotes
+    .map((note) => {
+      if (!note || typeof note !== "object") return null;
+      const content = String(
+        (note as { content?: unknown }).content || "",
+      ).trim();
+      if (!content) return null;
+      const rawTags = (note as { tags?: unknown }).tags;
+      const tags = Array.isArray(rawTags)
+        ? normalizeTags(rawTags.map((tag) => String(tag)))
+        : typeof rawTags === "string"
+          ? parseTagsInput(rawTags)
+          : [];
+      return { content, tags };
+    })
+    .filter(Boolean) as { content: string; tags: string[] }[];
+
+  if (cleanedNotes.length === 0) {
+    return { error: "No valid notes found to import." };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return { error: "Unauthorized" };
+
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("tier, credits_used, billing_start_date")
+    .eq("id", user.id)
+    .single();
+
+  if (profileError) return { error: profileError.message };
+  if (!profile) return { error: "Profile not found" };
+
+  const { maxChars, notes: noteLimit } = getTierConfig(profile.tier);
+  if (noteLimit !== Infinity) {
+    const { count } = await supabase
+      .from("notes")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id);
+
+    if ((count || 0) + cleanedNotes.length > noteLimit) {
+      return {
+        error: `Import exceeds your note limit of ${noteLimit}.`,
+      };
+    }
+  }
+
+  const { limit: creditLimit, normalizedUsage } = resolveCreditState(
+    profile,
+    new Date(),
+  );
+
+  if (
+    creditLimit !== Infinity &&
+    normalizedUsage + cleanedNotes.length > creditLimit
+  ) {
+    return {
+      error: "Not enough AI credits to import these notes.",
+    };
+  }
+
+  let imported = 0;
+  try {
+    for (const note of cleanedNotes) {
+      if (note.content.length > maxChars) {
+        throw new Error(
+          `Note too long. Max length is ${maxChars} characters.`,
+        );
+      }
+
+      const result = await genAI.models.embedContent({
+        model: "text-embedding-004",
+        contents: note.content,
+        config: { outputDimensionality: 768 },
+      });
+
+      const vector = extractEmbedding(result);
+      if (!vector) throw new Error("Failed to generate embedding.");
+
+      await checkCredits(supabase, user.id);
+
+      const { error } = await supabase.from("notes").insert({
+        user_id: user.id,
+        content: note.content,
+        embedding: vector,
+        tags: note.tags,
+      });
+
+      if (error) throw new Error(error.message);
+      imported += 1;
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : "Import failed",
+      imported,
+    };
+  }
+
+  revalidatePath("/dashboard/notes");
+  return { success: true, imported };
+}
+
+// 8. Auth Actions (Standard)
 export async function signUp(formData: FormData) {
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;

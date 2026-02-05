@@ -2,8 +2,22 @@ import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { Plus, Calendar, ArrowRight } from "lucide-react";
 import { getTierConfig } from "@/lib/tiers";
+import { TagFilterBar } from "@/components/notes/tag-filter-bar";
+import { ImportExportPanel } from "@/components/notes/import-export-panel";
 
-export default async function NotesLibraryPage() {
+function normalizeTag(value: string) {
+  return value
+    .trim()
+    .replace(/^#+/, "")
+    .replace(/\s+/g, "-")
+    .toLowerCase();
+}
+
+export default async function NotesLibraryPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tag?: string | string[] }>;
+}) {
   const supabase = await createClient();
 
   const {
@@ -14,13 +28,41 @@ export default async function NotesLibraryPage() {
     ? await supabase.from("profiles").select("tier").eq("id", user.id).single()
     : { data: null };
 
-  // Fetch all notes, newest first
-  const { data: notes } = await supabase
+  const resolvedSearchParams = await searchParams;
+  const tagParam = resolvedSearchParams?.tag;
+  const selectedTagsRaw = Array.isArray(tagParam)
+    ? tagParam
+    : tagParam
+      ? tagParam.split(",")
+      : [];
+  const selectedTags = Array.from(
+    new Set(selectedTagsRaw.map((tag) => normalizeTag(tag)).filter(Boolean)),
+  );
+
+  let notesQuery = supabase
     .from("notes")
     .select("*")
     .order("created_at", { ascending: false });
 
-  const notesCount = notes?.length || 0;
+  if (selectedTags.length > 0) {
+    notesQuery = notesQuery.contains("tags", selectedTags);
+  }
+
+  // Fetch notes (optionally filtered)
+  const { data: notes } = await notesQuery;
+
+  const { data: tagRows } = await supabase.from("notes").select("tags");
+  const allTags = Array.from(
+    new Set(
+      tagRows
+        ?.flatMap((row) => row.tags || [])
+        .map((tag: string) => normalizeTag(tag)) || [],
+    ),
+  ).sort();
+
+  const totalNotesCount = tagRows?.length || 0;
+  const notesCount = totalNotesCount;
+  const filteredCount = notes?.length || 0;
   const { notes: notesLimit } = getTierConfig(profile?.tier);
   const hasNoteLimit = Number.isFinite(notesLimit);
   const isAtLimit = hasNoteLimit && notesCount >= notesLimit;
@@ -37,11 +79,20 @@ export default async function NotesLibraryPage() {
             My Library
           </h1>
           <p className="text-muted mt-1">{notesUsageLabel}</p>
+          {selectedTags.length > 0 && (
+            <p className="text-xs text-muted mt-1">
+              Showing {filteredCount.toLocaleString()} matching notes.
+            </p>
+          )}
           {isAtLimit && (
             <p className="text-xs text-red-500 mt-1">
               Note limit reached. Upgrade to add more notes.
             </p>
           )}
+          {allTags.length > 0 && (
+            <TagFilterBar allTags={allTags} selectedTags={selectedTags} />
+          )}
+          <ImportExportPanel />
         </div>
         {isAtLimit ? (
           <div className="bg-surface text-muted px-4 py-2 rounded-lg flex items-center gap-2 cursor-not-allowed border border-border">
@@ -72,6 +123,23 @@ export default async function NotesLibraryPage() {
                 {note.content}
               </p>
             </div>
+            {note.tags?.length > 0 && (
+              <div className="mb-4 flex flex-wrap gap-2">
+                {note.tags.slice(0, 4).map((tag: string) => (
+                  <span
+                    key={tag}
+                    className="rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-500"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+                {note.tags.length > 4 && (
+                  <span className="text-[10px] text-muted">
+                    +{note.tags.length - 4}
+                  </span>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center justify-between pt-4 border-t border-border">
               <div className="flex items-center gap-2 text-xs text-muted">
