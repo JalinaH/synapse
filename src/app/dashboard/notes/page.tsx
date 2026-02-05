@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { Plus, Calendar, ArrowRight } from "lucide-react";
 import { getTierConfig } from "@/lib/tiers";
+import { TagFilterBar } from "@/components/notes/tag-filter-bar";
 
 function normalizeTag(value: string) {
   return value
@@ -58,8 +59,6 @@ export default async function NotesLibraryPage({
     ),
   ).sort();
 
-  const selectedTagSet = new Set(selectedTags);
-
   const totalNotesCount = tagRows?.length || 0;
   const notesCount = totalNotesCount;
   const filteredCount = notes?.length || 0;
@@ -69,15 +68,6 @@ export default async function NotesLibraryPage({
   const notesUsageLabel = hasNoteLimit
     ? `${notesCount.toLocaleString()} of ${notesLimit.toLocaleString()} memories used`
     : `${notesCount.toLocaleString()} memories stored`;
-
-  const buildTagHref = (tag: string) => {
-    const isSelected = selectedTagSet.has(tag);
-    const nextTags = isSelected
-      ? selectedTags.filter((item) => item !== tag)
-      : [...selectedTags, tag];
-    const query = nextTags.length ? `?tag=${nextTags.join(",")}` : "";
-    return `/dashboard/notes${query}`;
-  };
 
   return (
     <div className="max-w-6xl mx-auto p-8">
@@ -99,37 +89,7 @@ export default async function NotesLibraryPage({
             </p>
           )}
           {allTags.length > 0 && (
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-muted">
-                Filter by tag
-              </span>
-              <Link
-                href="/dashboard/notes"
-                className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
-                  selectedTags.length === 0
-                    ? "bg-emerald-500 text-white"
-                    : "bg-surface text-muted border border-border hover:border-emerald-500/50"
-                }`}
-              >
-                All
-              </Link>
-              {allTags.map((tag) => {
-                const isSelected = selectedTagSet.has(tag);
-                return (
-                  <Link
-                    key={tag}
-                    href={buildTagHref(tag)}
-                    className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
-                      isSelected
-                        ? "bg-emerald-500 text-white"
-                        : "bg-surface text-muted border border-border hover:border-emerald-500/50"
-                    }`}
-                  >
-                    #{tag}
-                  </Link>
-                );
-              })}
-            </div>
+            <TagFilterBar allTags={allTags} selectedTags={selectedTags} />
           )}
         </div>
         {isAtLimit ? (
