@@ -137,6 +137,31 @@ function mergeNotesById<T extends { id?: string | null }>(...lists: T[][]) {
   return merged;
 }
 
+function parseTagsInput(raw: FormDataEntryValue | null) {
+  if (!raw || typeof raw !== "string") return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  let tags: string[] = [];
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) tags = parsed.filter(Boolean);
+    } catch {
+      tags = [];
+    }
+  } else {
+    tags = trimmed.split(",");
+  }
+
+  const normalized = tags
+    .map((tag) => String(tag).trim())
+    .filter(Boolean)
+    .map((tag) => tag.replace(/^#+/, "").replace(/\s+/g, "-").toLowerCase());
+
+  return Array.from(new Set(normalized));
+}
+
 async function assertCreditsAvailable(
   supabase: SupabaseClient,
   userId: string,
@@ -265,6 +290,7 @@ async function checkCharLimit(
 export async function addNote(formData: FormData) {
   const content = formData.get("content") as string;
   if (!content) return { error: "Content is required" };
+  const tags = parseTagsInput(formData.get("tags"));
 
   const supabase = await createClient();
   const {
@@ -296,6 +322,7 @@ export async function addNote(formData: FormData) {
       user_id: user.id,
       content: content,
       embedding: vector,
+      tags,
     });
 
     if (error) throw new Error(error.message);
@@ -341,6 +368,7 @@ export async function updateNote(formData: FormData) {
   const noteId = formData.get("noteId") as string;
   const content = formData.get("content") as string;
   if (!noteId || !content) return { error: "Missing data" };
+  const tags = parseTagsInput(formData.get("tags"));
 
   const supabase = await createClient();
   const {
@@ -356,10 +384,25 @@ export async function updateNote(formData: FormData) {
     // 2. Ownership Check
     const { data: note } = await supabase
       .from("notes")
-      .select("user_id")
+      .select("user_id, content")
       .eq("id", noteId)
       .single();
     if (!note || note.user_id !== user.id) return { error: "Unauthorized" };
+
+    const contentChanged = note.content !== content;
+
+    if (!contentChanged) {
+      const { error } = await supabase
+        .from("notes")
+        .update({ tags })
+        .eq("id", noteId);
+
+      if (error) throw error;
+
+      revalidatePath(`/dashboard/notes/${noteId}`);
+      revalidatePath("/dashboard/notes");
+      return { success: true };
+    }
 
     // 3. Pre-check credit availability before embedding
     await assertCreditsAvailable(supabase, user.id);
@@ -380,7 +423,7 @@ export async function updateNote(formData: FormData) {
     // 6. Update DB
     const { error } = await supabase
       .from("notes")
-      .update({ content, embedding: vector })
+      .update({ content, embedding: vector, tags })
       .eq("id", noteId);
 
     if (error) throw error;

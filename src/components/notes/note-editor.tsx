@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { deleteNote, updateNote } from "@/app/actions";
 import Markdown from "react-markdown"; // The markdown renderer
@@ -11,6 +11,7 @@ interface Note {
   id: string;
   content: string;
   created_at: string;
+  tags?: string[] | null;
 }
 
 export function NoteEditor({
@@ -23,6 +24,8 @@ export function NoteEditor({
   const router = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [content, setContent] = useState(note.content);
+  const [tags, setTags] = useState<string[]>(note.tags ?? []);
+  const [tagInput, setTagInput] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -36,6 +39,38 @@ export function NoteEditor({
   const charCount = content.length;
   const overLimit = hasCharLimit && charCount > maxChars;
   const remaining = hasCharLimit ? Math.max(maxChars - charCount, 0) : null;
+
+  function normalizeTag(value: string) {
+    return value
+      .trim()
+      .replace(/^#+/, "")
+      .replace(/\s+/g, "-")
+      .toLowerCase();
+  }
+
+  function addTag(value: string) {
+    const normalized = normalizeTag(value);
+    if (!normalized) return;
+    setTags((current) =>
+      current.includes(normalized) ? current : [...current, normalized],
+    );
+    setTagInput("");
+  }
+
+  function removeTag(tag: string) {
+    setTags((current) => current.filter((item) => item !== tag));
+  }
+
+  function handleTagKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter" || event.key === ",") {
+      event.preventDefault();
+      addTag(tagInput);
+    }
+    if (event.key === "Backspace" && tagInput.length === 0 && tags.length) {
+      event.preventDefault();
+      setTags((current) => current.slice(0, -1));
+    }
+  }
 
   const handleSave = async () => {
     if (overLimit) {
@@ -51,6 +86,7 @@ export function NoteEditor({
     const formData = new FormData();
     formData.append("noteId", note.id);
     formData.append("content", content);
+    formData.append("tags", JSON.stringify(tags));
 
     const result = await updateNote(formData); // Call Server Action
     if (result?.error) {
@@ -241,6 +277,56 @@ export function NoteEditor({
           }`}
         >
           {status.message}
+        </div>
+      )}
+
+      {(tags.length > 0 || isEditing) && (
+        <div className="px-6 pt-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {tags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => {
+                  if (isEditing) removeTag(tag);
+                }}
+                className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                  isDark
+                    ? "bg-neutral-800 text-gray-200 hover:bg-neutral-700"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                } ${isEditing ? "cursor-pointer" : "cursor-default"}`}
+              >
+                #{tag}
+                {isEditing ? " x" : ""}
+              </button>
+            ))}
+          </div>
+          {isEditing && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                value={tagInput}
+                onChange={(event) => setTagInput(event.target.value)}
+                onKeyDown={handleTagKeyDown}
+                placeholder="Add tags (press Enter)..."
+                className={`flex-1 min-w-[200px] rounded-xl border px-4 py-2 text-sm transition-colors ${
+                  isDark
+                    ? "bg-neutral-950 border-neutral-800 text-gray-100 placeholder:text-gray-600 focus:border-neutral-600"
+                    : "bg-gray-50 border-gray-200 text-gray-900 placeholder:text-gray-400 focus:border-gray-400"
+                } outline-none`}
+              />
+              <button
+                type="button"
+                onClick={() => addTag(tagInput)}
+                className={`rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
+                  isDark
+                    ? "bg-neutral-800 text-gray-200 hover:bg-neutral-700"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                Add tag
+              </button>
+            </div>
+          )}
         </div>
       )}
 

@@ -9,6 +9,7 @@ interface Note {
   id: string;
   content: string;
   created_at: string;
+  tags?: string[] | null;
 }
 
 interface RelatedNote {
