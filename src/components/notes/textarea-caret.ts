@@ -46,8 +46,8 @@ export function getCaretPosition(
   const div = document.createElement("div");
 
   STYLE_KEYS.forEach((key) => {
-    // @ts-expect-error: dynamic style assignment
-    div.style[key] = style[key];
+    const value = style.getPropertyValue(key);
+    if (value) div.style.setProperty(key, value);
   });
 
   div.style.position = "absolute";
