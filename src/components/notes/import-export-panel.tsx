@@ -276,7 +276,7 @@ export function ImportExportPanel() {
         return;
       }
       setPendingImport({ notes, fileName: file.name });
-    } catch (error) {
+    } catch {
       setStatus({
         type: "error",
         message: "Unable to read this file.",

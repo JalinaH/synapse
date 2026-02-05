@@ -80,12 +80,10 @@ export function LinkAutocomplete({
   const { theme } = useTheme();
   const isDark = theme === "dark";
   const [filter, setFilter] = useState("");
-
-  useEffect(() => {
-    if (query === null) setFilter("");
-  }, [query]);
-
-  const baseQuery = (filter.trim() || query || "").trim().toLowerCase();
+  const effectiveFilter = query === null ? "" : filter;
+  const baseQuery = (effectiveFilter.trim() || query || "")
+    .trim()
+    .toLowerCase();
 
   const suggestions = useMemo(() => {
     if (!candidates.length || query === null) return [];
@@ -117,7 +115,7 @@ export function LinkAutocomplete({
       </div>
       <div className="px-1 pb-2">
         <input
-          value={filter}
+          value={query === null ? "" : filter}
           onChange={(event) => setFilter(event.target.value)}
           placeholder="Search notes..."
           className={`w-full rounded-lg border px-3 py-2 text-xs transition-colors ${
