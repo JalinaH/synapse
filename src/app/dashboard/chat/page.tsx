@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import Link from "next/link";
 import { chatWithBrain } from "@/app/actions";
 import { Send, Bot, User, Sparkles } from "lucide-react";
 import Markdown from "react-markdown";
@@ -10,6 +11,8 @@ interface Source {
   id: string;
   content: string;
   similarity: number;
+  snippet?: string;
+  highlight?: string;
 }
 
 type Message = {
@@ -17,6 +20,18 @@ type Message = {
   content: string;
   sources?: Source[] | null;
 };
+
+function buildCitationHref(source: Source) {
+  const params = new URLSearchParams();
+  const highlight = (source.highlight || source.snippet || "").trim();
+  if (highlight) {
+    params.set("highlight", highlight);
+  }
+  const query = params.toString();
+  return query
+    ? `/dashboard/notes/${source.id}?${query}`
+    : `/dashboard/notes/${source.id}`;
+}
 
 export default function ChatPage() {
   const [input, setInput] = useState("");
@@ -140,16 +155,21 @@ export default function ChatPage() {
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {msg.sources.map((source) => (
-                        <span
+                        <Link
                           key={source.id}
+                          href={buildCitationHref(source)}
                           className={`text-xs px-2 py-1 rounded-lg border truncate max-w-[150px] ${
                             isDark
-                              ? "bg-neutral-900 border-neutral-700 text-gray-300"
-                              : "bg-white border-gray-200 text-gray-600"
+                              ? "bg-neutral-900 border-neutral-700 text-gray-300 hover:border-amber-500/50 hover:text-gray-100"
+                              : "bg-white border-gray-200 text-gray-600 hover:border-amber-500/50 hover:text-gray-900"
                           }`}
+                          title={source.snippet || source.content}
                         >
-                          {source.content.substring(0, 20)}...
-                        </span>
+                          {(source.snippet || source.content).substring(0, 24)}
+                          {(source.snippet || source.content).length > 24
+                            ? "..."
+                            : ""}
+                        </Link>
                       ))}
                     </div>
                   </div>

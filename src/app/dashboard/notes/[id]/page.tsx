@@ -23,9 +23,23 @@ function extractLinkedIds(content: string) {
   return Array.from(new Set(ids));
 }
 
-export default async function NotePage({ params }: { params: { id: string } }) {
+export default async function NotePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<{ highlight?: string | string[] }>;
+}) {
   const supabase = await createClient();
   const { id } = await params;
+  const resolvedSearchParams = await searchParams;
+  const highlightParam = resolvedSearchParams?.highlight;
+  const highlightText =
+    typeof highlightParam === "string"
+      ? highlightParam.trim().slice(0, 160)
+      : Array.isArray(highlightParam)
+        ? String(highlightParam[0] || "").trim().slice(0, 160)
+        : "";
 
   const {
     data: { user },
@@ -98,6 +112,7 @@ export default async function NotePage({ params }: { params: { id: string } }) {
       outgoingLinks={(outgoingLinks as LinkNote[] | null) || []}
       backlinks={backlinks}
       maxChars={maxChars}
+      highlightText={highlightText}
     />
   );
 }

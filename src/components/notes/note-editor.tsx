@@ -1,6 +1,16 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useRouter } from "next/navigation";
 import { deleteNote, updateNote } from "@/app/actions";
 import Markdown from "react-markdown"; // The markdown renderer
@@ -20,12 +30,100 @@ interface Note {
   tags?: string[] | null;
 }
 
+const MIN_HIGHLIGHT_LENGTH = 3;
+
+function highlightTextSegment(
+  text: string,
+  query: string,
+  className: string,
+  keyPrefix: string,
+): ReactNode {
+  const normalizedQuery = query.trim();
+  if (normalizedQuery.length < MIN_HIGHLIGHT_LENGTH) return text;
+
+  const lowerText = text.toLowerCase();
+  const lowerQuery = normalizedQuery.toLowerCase();
+  let from = 0;
+  let matchIndex = lowerText.indexOf(lowerQuery, from);
+
+  if (matchIndex === -1) return text;
+
+  const nodes: ReactNode[] = [];
+  let chunk = 0;
+
+  while (matchIndex !== -1) {
+    if (matchIndex > from) {
+      nodes.push(text.slice(from, matchIndex));
+    }
+
+    const matchedText = text.slice(matchIndex, matchIndex + normalizedQuery.length);
+    nodes.push(
+      <mark
+        key={`${keyPrefix}-${chunk}`}
+        data-citation-match="true"
+        className={className}
+      >
+        {matchedText}
+      </mark>,
+    );
+
+    chunk += 1;
+    from = matchIndex + normalizedQuery.length;
+    matchIndex = lowerText.indexOf(lowerQuery, from);
+  }
+
+  if (from < text.length) {
+    nodes.push(text.slice(from));
+  }
+
+  return <>{nodes}</>;
+}
+
+function highlightRenderedNode(
+  node: ReactNode,
+  query: string,
+  className: string,
+  keyPrefix = "citation",
+): ReactNode {
+  if (typeof node === "string") {
+    return highlightTextSegment(node, query, className, keyPrefix);
+  }
+
+  if (typeof node === "number" || typeof node === "boolean" || node === null) {
+    return node;
+  }
+
+  if (Array.isArray(node)) {
+    return Children.map(node, (child, index) =>
+      highlightRenderedNode(child, query, className, `${keyPrefix}-${index}`),
+    );
+  }
+
+  if (!isValidElement(node)) return node;
+
+  const element = node as ReactElement<{ children?: ReactNode }>;
+  if (element.props.children === undefined) return element;
+
+  return cloneElement(
+    element,
+    undefined,
+    highlightRenderedNode(
+      element.props.children,
+      query,
+      className,
+      `${keyPrefix}-child`,
+    ),
+  );
+}
+
 export function NoteEditor({
   note,
   maxChars,
+  highlightText,
 }: {
   note: Note;
   maxChars: number;
+  highlightText?: string;
 }) {
   const router = useRouter();
   const [isEditing, setIsEditing] = useState(false);
@@ -34,6 +132,7 @@ export function NoteEditor({
   const [tagInput, setTagInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const textareaWrapperRef = useRef<HTMLDivElement>(null);
+  const viewerRef = useRef<HTMLElement>(null);
   const [cursor, setCursor] = useState(0);
   const [mentionPosition, setMentionPosition] = useState<{
     top: number;
@@ -48,8 +147,18 @@ export function NoteEditor({
   } | null>(null);
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const citationHighlight = (highlightText || "").trim();
   const linkCandidates = useNoteLinkCandidates(note.id);
   const activeMention = isEditing ? getActiveMention(content, cursor) : null;
+
+  useEffect(() => {
+    if (isEditing || !citationHighlight || !viewerRef.current) return;
+    const firstMatch = viewerRef.current.querySelector<HTMLElement>(
+      "[data-citation-match='true']",
+    );
+    if (!firstMatch) return;
+    firstMatch.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [citationHighlight, isEditing, content]);
 
   function updateMentionPosition(value: string, selection: number) {
     const mention = getActiveMention(value, selection);
@@ -492,16 +601,38 @@ export function NoteEditor({
             </div>
           </div>
         ) : (
-          // Tailwind Typography (prose) makes the markdown look great automatically
-          <article
-            className={`prose prose-lg max-w-none prose-headings:font-bold p-8 ${
-              isDark
-                ? "prose-invert prose-a:text-blue-400"
-                : "prose-a:text-blue-600"
-            }`}
-          >
-            <Markdown>{content}</Markdown>
-          </article>
+          <div className="p-8">
+            {citationHighlight && (
+              <div
+                className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+                  isDark
+                    ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                    : "border-amber-500/30 bg-amber-500/10 text-amber-700"
+                }`}
+              >
+                <p className="text-[11px] font-semibold uppercase tracking-wide">
+                  Matched section from chat
+                </p>
+                <p className="mt-1">{citationHighlight}</p>
+              </div>
+            )}
+            <article
+              ref={viewerRef}
+              className={`prose prose-lg max-w-none prose-headings:font-bold ${
+                isDark
+                  ? "prose-invert prose-a:text-blue-400"
+                  : "prose-a:text-blue-600"
+              }`}
+            >
+              {highlightRenderedNode(
+                <Markdown>{content}</Markdown>,
+                citationHighlight,
+                isDark
+                  ? "rounded bg-amber-500/35 px-1 text-amber-100"
+                  : "rounded bg-amber-300/60 px-1 text-amber-900",
+              )}
+            </article>
+          </div>
         )}
       </div>
     </div>

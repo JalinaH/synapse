@@ -21,6 +21,10 @@ const MAX_SYNTHESIS_NOTES = 40;
 const SYNTHESIS_MATCH_COUNT = 15;
 const SYNTHESIS_MATCH_THRESHOLD = 0.2;
 const MAX_IMPORT_NOTES = 50;
+const MAX_CITATION_SNIPPET_CHARS = 180;
+const MAX_CITATION_HIGHLIGHT_CHARS = 96;
+const MAX_CITATION_TERMS = 12;
+const MIN_CITATION_TERM_CHARS = 3;
 
 // --- HELPER FUNCTIONS ---
 
@@ -33,6 +37,20 @@ type CreditProfile = {
   tier?: string | null;
   credits_used?: number | null;
   billing_start_date?: string | null;
+};
+
+type SourceNote = {
+  id?: string | null;
+  content?: string | null;
+  similarity?: number | null;
+};
+
+type CitationSource = {
+  id: string;
+  content: string;
+  similarity: number;
+  snippet: string;
+  highlight: string;
 };
 
 function extractEmbedding(result: EmbeddingResponse) {
@@ -149,6 +167,115 @@ function mergeNotesById<T extends { id?: string | null }>(...lists: T[][]) {
   }
 
   return merged;
+}
+
+function normalizeWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function findCaseInsensitiveIndex(text: string, query: string) {
+  if (!query) return -1;
+  return text.toLowerCase().indexOf(query.toLowerCase());
+}
+
+function getCitationTerms(question: string) {
+  const terms = question.toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+  const unique = Array.from(new Set(terms.map((term) => term.trim())));
+  unique.sort((a, b) => b.length - a.length);
+  return unique.slice(0, MAX_CITATION_TERMS);
+}
+
+function pickHighlightText(content: string, question: string) {
+  const cleanedContent = normalizeWhitespace(content);
+  if (!cleanedContent) return "";
+
+  const normalizedQuestion = normalizeWhitespace(question);
+  if (
+    normalizedQuestion.length >= MIN_CITATION_TERM_CHARS &&
+    normalizedQuestion.length <= MAX_CITATION_HIGHLIGHT_CHARS
+  ) {
+    const fullMatchIndex = findCaseInsensitiveIndex(
+      cleanedContent,
+      normalizedQuestion,
+    );
+    if (fullMatchIndex >= 0) {
+      return cleanedContent.slice(
+        fullMatchIndex,
+        fullMatchIndex + normalizedQuestion.length,
+      );
+    }
+  }
+
+  const terms = getCitationTerms(normalizedQuestion);
+  for (const term of terms) {
+    if (term.length < MIN_CITATION_TERM_CHARS) continue;
+    const termIndex = findCaseInsensitiveIndex(cleanedContent, term);
+    if (termIndex >= 0) {
+      return cleanedContent.slice(termIndex, termIndex + term.length);
+    }
+  }
+
+  return cleanedContent.slice(0, MAX_CITATION_HIGHLIGHT_CHARS);
+}
+
+function buildCitationSnippet(content: string, highlight: string) {
+  const cleanedContent = normalizeWhitespace(content);
+  if (!cleanedContent) return "";
+
+  const normalizedHighlight = normalizeWhitespace(highlight);
+  if (!normalizedHighlight) {
+    const preview = cleanedContent.slice(0, MAX_CITATION_SNIPPET_CHARS).trim();
+    return cleanedContent.length > preview.length ? `${preview}...` : preview;
+  }
+
+  const matchIndex = findCaseInsensitiveIndex(cleanedContent, normalizedHighlight);
+  if (matchIndex === -1) {
+    const preview = cleanedContent.slice(0, MAX_CITATION_SNIPPET_CHARS).trim();
+    return cleanedContent.length > preview.length ? `${preview}...` : preview;
+  }
+
+  const remainingChars = Math.max(
+    MAX_CITATION_SNIPPET_CHARS - normalizedHighlight.length,
+    0,
+  );
+  const start = Math.max(matchIndex - Math.floor(remainingChars / 2), 0);
+  const end = Math.min(start + MAX_CITATION_SNIPPET_CHARS, cleanedContent.length);
+
+  let snippet = cleanedContent.slice(start, end).trim();
+  if (start > 0) snippet = `...${snippet}`;
+  if (end < cleanedContent.length) snippet = `${snippet}...`;
+  return snippet;
+}
+
+function buildCitationSources(notes: SourceNote[], question: string) {
+  const sources: CitationSource[] = [];
+  const seenIds = new Set<string>();
+
+  for (const note of notes) {
+    const id = note.id ? String(note.id) : "";
+    const content = normalizeWhitespace(String(note.content || ""));
+    if (!id || !content || seenIds.has(id)) continue;
+    seenIds.add(id);
+
+    const highlightCandidate = pickHighlightText(content, question);
+    const snippet = buildCitationSnippet(content, highlightCandidate);
+    const highlight = normalizeWhitespace(
+      highlightCandidate || snippet.slice(0, MAX_CITATION_HIGHLIGHT_CHARS),
+    );
+
+    sources.push({
+      id,
+      content,
+      similarity:
+        typeof note.similarity === "number" && Number.isFinite(note.similarity)
+          ? note.similarity
+          : 0,
+      snippet,
+      highlight,
+    });
+  }
+
+  return sources;
 }
 
 function parseTagsInput(raw: FormDataEntryValue | null) {
@@ -496,7 +623,13 @@ export async function chatWithBrain(
         `,
       });
 
-      return { answer: response.text || "", sources: notes };
+      return {
+        answer: response.text || "",
+        sources: buildCitationSources(
+          (notes as SourceNote[] | null | undefined) || [],
+          userQuestion,
+        ),
+      };
     }
 
     if (wantsSynthesis) {
@@ -567,7 +700,13 @@ export async function chatWithBrain(
         `,
       });
 
-      return { answer: response.text || "", sources: mergedNotes };
+      return {
+        answer: response.text || "",
+        sources: buildCitationSources(
+          mergedNotes as SourceNote[],
+          userQuestion,
+        ),
+      };
     }
 
     // 2. Embed Question
@@ -611,7 +750,13 @@ export async function chatWithBrain(
       `,
     });
 
-    return { answer: response.text || "", sources: relatedNotes };
+    return {
+      answer: response.text || "",
+      sources: buildCitationSources(
+        (relatedNotes as SourceNote[] | null | undefined) || [],
+        userQuestion,
+      ),
+    };
   } catch (err) {
     console.error(err);
     return {
