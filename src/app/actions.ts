@@ -14,6 +14,8 @@ const genAI = new GoogleGenAI({
 
 const CREDIT_RESET_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_CREDIT_UPDATE_ATTEMPTS = 3;
+const EMBEDDING_MODEL =
+  process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
 const MAX_SUMMARY_CONTEXT_CHARS = 20000;
 const MAX_SUMMARY_NOTES = 100;
 const MAX_SYNTHESIS_CONTEXT_CHARS = 20000;
@@ -25,6 +27,10 @@ const MAX_CITATION_SNIPPET_CHARS = 180;
 const MAX_CITATION_HIGHLIGHT_CHARS = 96;
 const MAX_CITATION_TERMS = 12;
 const MIN_CITATION_TERM_CHARS = 3;
+const MAX_CHAT_HISTORY_MESSAGES = 12;
+const MAX_CHAT_HISTORY_CHARS = 4000;
+const KEYWORD_FALLBACK_NOTE_CANDIDATES = 200;
+const KEYWORD_FALLBACK_MATCH_COUNT = 5;
 
 // --- HELPER FUNCTIONS ---
 
@@ -51,6 +57,20 @@ type CitationSource = {
   similarity: number;
   snippet: string;
   highlight: string;
+};
+
+type KeywordCandidateNote = {
+  id: string;
+  content: string;
+  created_at?: string | null;
+};
+
+type KeywordScoredNote = {
+  id: string;
+  content: string;
+  similarity: number;
+  score: number;
+  createdAt: number;
 };
 
 function extractEmbedding(result: EmbeddingResponse) {
@@ -278,6 +298,101 @@ function buildCitationSources(notes: SourceNote[], question: string) {
   return sources;
 }
 
+function buildHistoryContext(
+  history: { role: string; content: string }[],
+  maxMessages: number,
+  maxChars: number,
+) {
+  if (!Array.isArray(history) || history.length === 0) return "";
+
+  const recent = history.slice(-maxMessages);
+  const chunks: string[] = [];
+  let total = 0;
+
+  for (const message of recent) {
+    const role = message.role === "assistant" ? "Assistant" : "User";
+    const content = normalizeWhitespace(message.content || "");
+    if (!content) continue;
+    const line = `${role}: ${content}`;
+    if (total + line.length > maxChars) break;
+    chunks.push(line);
+    total += line.length;
+  }
+
+  return chunks.join("\n");
+}
+
+function rankKeywordFallbackNotes(
+  notes: KeywordCandidateNote[],
+  query: string,
+  limit: number,
+) {
+  const normalizedQuery = normalizeWhitespace(query).toLowerCase();
+  const terms = getCitationTerms(normalizedQuery);
+  const scored: KeywordScoredNote[] = [];
+
+  for (const note of notes) {
+    const content = normalizeWhitespace(note.content || "");
+    if (!content) continue;
+    const lowerContent = content.toLowerCase();
+    let score = 0;
+
+    if (normalizedQuery && lowerContent.includes(normalizedQuery)) {
+      score += 6;
+    }
+
+    for (const term of terms) {
+      if (!term || term.length < MIN_CITATION_TERM_CHARS) continue;
+      if (!lowerContent.includes(term)) continue;
+      score += term.length >= 6 ? 1.5 : 1;
+    }
+
+    if (score <= 0) continue;
+
+    scored.push({
+      id: note.id,
+      content,
+      similarity: Math.min(0.2 + score / 12, 0.89),
+      score,
+      createdAt: new Date(note.created_at || 0).getTime() || 0,
+    });
+  }
+
+  return scored
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.createdAt - a.createdAt;
+    })
+    .slice(0, Math.max(1, limit))
+    .map(({ id, content, similarity }) => ({ id, content, similarity }));
+}
+
+async function fetchKeywordFallbackNotes(
+  supabase: SupabaseClient,
+  userId: string,
+  query: string,
+  limit = KEYWORD_FALLBACK_MATCH_COUNT,
+) {
+  const { data, error } = await supabase
+    .from("notes")
+    .select("id, content, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(KEYWORD_FALLBACK_NOTE_CANDIDATES);
+
+  if (error) throw new Error(error.message);
+
+  return rankKeywordFallbackNotes(
+    ((data as KeywordCandidateNote[] | null | undefined) || []).map((note) => ({
+      id: String(note.id),
+      content: String(note.content || ""),
+      created_at: note.created_at || null,
+    })),
+    query,
+    limit,
+  );
+}
+
 function parseTagsInput(raw: FormDataEntryValue | null) {
   if (!raw || typeof raw !== "string") return [];
   const trimmed = raw.trim();
@@ -444,7 +559,7 @@ export async function addNote(formData: FormData) {
 
     // Generate Embedding
     const result = await genAI.models.embedContent({
-      model: "text-embedding-004",
+      model: EMBEDDING_MODEL,
       contents: content,
       config: { outputDimensionality: 768 },
     });
@@ -476,10 +591,15 @@ export async function addNote(formData: FormData) {
 // 2. Search Action
 export async function searchNotes(query: string) {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return [];
 
   try {
     const result = await genAI.models.embedContent({
-      model: "text-embedding-004",
+      model: EMBEDDING_MODEL,
       contents: query,
       config: { outputDimensionality: 768 },
     });
@@ -493,10 +613,21 @@ export async function searchNotes(query: string) {
       match_count: 5,
     });
 
-    return data || [];
+    const relatedNotes =
+      (data as { id: string; content: string; similarity: number }[] | null) ||
+      [];
+
+    if (relatedNotes.length > 0) return relatedNotes;
+
+    return await fetchKeywordFallbackNotes(supabase, user.id, query, 5);
   } catch (error) {
     console.error("Search error:", error);
-    return [];
+    try {
+      return await fetchKeywordFallbackNotes(supabase, user.id, query, 5);
+    } catch (fallbackError) {
+      console.error("Search keyword fallback error:", fallbackError);
+      return [];
+    }
   }
 }
 
@@ -546,7 +677,7 @@ export async function updateNote(formData: FormData) {
 
     // 4. Generate NEW Embedding
     const result = await genAI.models.embedContent({
-      model: "text-embedding-004",
+      model: EMBEDDING_MODEL,
       contents: content,
       config: { outputDimensionality: 768 },
     });
@@ -587,6 +718,11 @@ export async function chatWithBrain(
   try {
     // 1. Pre-check credit availability before embedding
     await assertCreditsAvailable(supabase, user.id);
+    const chatHistoryContext = buildHistoryContext(
+      history,
+      MAX_CHAT_HISTORY_MESSAGES,
+      MAX_CHAT_HISTORY_CHARS,
+    );
 
     const wantsSummary = isSummaryRequest(userQuestion);
     const wantsSynthesis = !wantsSummary && isSynthesisRequest(userQuestion);
@@ -619,6 +755,8 @@ export async function chatWithBrain(
         contents: `
         You are a Second Brain AI. Summarize the user's notes clearly and concisely.
         Provide a short overview and then 3-6 bullet points of key themes.
+        RECENT_CHAT_CONTEXT:
+        ${chatHistoryContext || "None"}
         NOTES: ${contextText}
         `,
       });
@@ -638,7 +776,7 @@ export async function chatWithBrain(
 
       try {
         const result = await genAI.models.embedContent({
-          model: "text-embedding-004",
+          model: EMBEDDING_MODEL,
           contents: userQuestion,
           config: { outputDimensionality: 768 },
         });
@@ -695,6 +833,8 @@ export async function chatWithBrain(
         contents: `
         You are a Second Brain AI. Use the notes below to synthesize an answer.
         If the user asks for a plan, propose a concise, practical plan.
+        RECENT_CHAT_CONTEXT:
+        ${chatHistoryContext || "None"}
         NOTES: ${contextText}
         QUESTION: ${userQuestion}
         `,
@@ -709,29 +849,47 @@ export async function chatWithBrain(
       };
     }
 
-    // 2. Embed Question
-    const result = await genAI.models.embedContent({
-      model: "text-embedding-004",
-      contents: userQuestion,
-      config: { outputDimensionality: 768 },
-    });
+    let relatedNotes: { id: string; content: string; similarity?: number }[] =
+      [];
 
-    const vector = extractEmbedding(result);
-    if (!vector) {
-      return { answer: "Failed to generate embedding.", sources: [] };
+    try {
+      // 2. Embed Question
+      const result = await genAI.models.embedContent({
+        model: EMBEDDING_MODEL,
+        contents: userQuestion,
+        config: { outputDimensionality: 768 },
+      });
+
+      const vector = extractEmbedding(result);
+
+      if (vector) {
+        // 3. Find relevant notes
+        const { data, error } = await supabase.rpc("match_notes", {
+          query_embedding: vector,
+          match_threshold: 0.3,
+          match_count: 5,
+        });
+
+        if (error) throw new Error("Database error");
+
+        relatedNotes =
+          (data as { id: string; content: string; similarity?: number }[]) || [];
+      }
+    } catch (retrievalError) {
+      console.error("Chat embedding retrieval error:", retrievalError);
     }
 
-    // 3. Deduct Credit (Chatting costs money!)
+    if (!relatedNotes.length) {
+      relatedNotes = await fetchKeywordFallbackNotes(
+        supabase,
+        user.id,
+        userQuestion,
+        5,
+      );
+    }
+
+    // 4. Deduct Credit (Chatting costs money!)
     await checkCredits(supabase, user.id);
-
-    // 4. Find relevant notes
-    const { data: relatedNotes, error } = await supabase.rpc("match_notes", {
-      query_embedding: vector,
-      match_threshold: 0.3,
-      match_count: 5,
-    });
-
-    if (error) throw new Error("Database error");
 
     // 5. Construct Context
     type RelatedNote = { content: string };
@@ -745,6 +903,8 @@ export async function chatWithBrain(
       model: "gemini-2.5-flash",
       contents: `
       You are a Second Brain AI. Answer using the Context below.
+      RECENT_CHAT_CONTEXT:
+      ${chatHistoryContext || "None"}
       CONTEXT: ${contextText}
       QUESTION: ${userQuestion}
       `,
@@ -917,7 +1077,7 @@ export async function importNotes(formData: FormData) {
       }
 
       const result = await genAI.models.embedContent({
-        model: "text-embedding-004",
+        model: EMBEDDING_MODEL,
         contents: note.content,
         config: { outputDimensionality: 768 },
       });

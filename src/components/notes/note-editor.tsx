@@ -1,15 +1,10 @@
 "use client";
 
 import {
-  Children,
-  cloneElement,
-  isValidElement,
   useEffect,
   useRef,
   useState,
   type KeyboardEvent,
-  type ReactElement,
-  type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import { deleteNote, updateNote } from "@/app/actions";
@@ -32,88 +27,75 @@ interface Note {
 
 const MIN_HIGHLIGHT_LENGTH = 3;
 
-function highlightTextSegment(
-  text: string,
-  query: string,
-  className: string,
-  keyPrefix: string,
-): ReactNode {
-  const normalizedQuery = query.trim();
-  if (normalizedQuery.length < MIN_HIGHLIGHT_LENGTH) return text;
-
-  const lowerText = text.toLowerCase();
-  const lowerQuery = normalizedQuery.toLowerCase();
-  let from = 0;
-  let matchIndex = lowerText.indexOf(lowerQuery, from);
-
-  if (matchIndex === -1) return text;
-
-  const nodes: ReactNode[] = [];
-  let chunk = 0;
-
-  while (matchIndex !== -1) {
-    if (matchIndex > from) {
-      nodes.push(text.slice(from, matchIndex));
-    }
-
-    const matchedText = text.slice(matchIndex, matchIndex + normalizedQuery.length);
-    nodes.push(
-      <mark
-        key={`${keyPrefix}-${chunk}`}
-        data-citation-match="true"
-        className={className}
-      >
-        {matchedText}
-      </mark>,
-    );
-
-    chunk += 1;
-    from = matchIndex + normalizedQuery.length;
-    matchIndex = lowerText.indexOf(lowerQuery, from);
+function clearCitationMarks(root: HTMLElement) {
+  const marks = Array.from(
+    root.querySelectorAll<HTMLElement>("mark[data-citation-match='true']"),
+  );
+  for (const mark of marks) {
+    const text = mark.textContent || "";
+    mark.replaceWith(document.createTextNode(text));
   }
-
-  if (from < text.length) {
-    nodes.push(text.slice(from));
-  }
-
-  return <>{nodes}</>;
 }
 
-function highlightRenderedNode(
-  node: ReactNode,
+function applyCitationMarks(
+  root: HTMLElement,
   query: string,
   className: string,
-  keyPrefix = "citation",
-): ReactNode {
-  if (typeof node === "string") {
-    return highlightTextSegment(node, query, className, keyPrefix);
+) {
+  const normalizedQuery = query.trim();
+  if (normalizedQuery.length < MIN_HIGHLIGHT_LENGTH) return null;
+
+  const lowerQuery = normalizedQuery.toLowerCase();
+  const textNodes: Text[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const parent = node.parentElement;
+    if (!parent) continue;
+    if (!node.nodeValue || !node.nodeValue.trim()) continue;
+    if (parent.closest("mark[data-citation-match='true']")) continue;
+    textNodes.push(node);
   }
 
-  if (typeof node === "number" || typeof node === "boolean" || node === null) {
-    return node;
+  let firstMatch: HTMLElement | null = null;
+
+  for (const textNode of textNodes) {
+    const rawText = textNode.nodeValue || "";
+    const lowerText = rawText.toLowerCase();
+    let start = lowerText.indexOf(lowerQuery);
+    if (start === -1) continue;
+
+    const fragment = document.createDocumentFragment();
+    let from = 0;
+
+    while (start !== -1) {
+      if (start > from) {
+        fragment.appendChild(
+          document.createTextNode(rawText.slice(from, start)),
+        );
+      }
+
+      const end = start + normalizedQuery.length;
+      const mark = document.createElement("mark");
+      mark.setAttribute("data-citation-match", "true");
+      mark.className = className;
+      mark.textContent = rawText.slice(start, end);
+      if (!firstMatch) firstMatch = mark;
+      fragment.appendChild(mark);
+
+      from = end;
+      start = lowerText.indexOf(lowerQuery, from);
+    }
+
+    if (from < rawText.length) {
+      fragment.appendChild(document.createTextNode(rawText.slice(from)));
+    }
+
+    textNode.replaceWith(fragment);
   }
 
-  if (Array.isArray(node)) {
-    return Children.map(node, (child, index) =>
-      highlightRenderedNode(child, query, className, `${keyPrefix}-${index}`),
-    );
-  }
-
-  if (!isValidElement(node)) return node;
-
-  const element = node as ReactElement<{ children?: ReactNode }>;
-  if (element.props.children === undefined) return element;
-
-  return cloneElement(
-    element,
-    undefined,
-    highlightRenderedNode(
-      element.props.children,
-      query,
-      className,
-      `${keyPrefix}-child`,
-    ),
-  );
+  return firstMatch;
 }
 
 export function NoteEditor({
@@ -152,13 +134,24 @@ export function NoteEditor({
   const activeMention = isEditing ? getActiveMention(content, cursor) : null;
 
   useEffect(() => {
-    if (isEditing || !citationHighlight || !viewerRef.current) return;
-    const firstMatch = viewerRef.current.querySelector<HTMLElement>(
-      "[data-citation-match='true']",
+    if (!viewerRef.current) return;
+
+    const root = viewerRef.current;
+    clearCitationMarks(root);
+
+    if (isEditing || !citationHighlight) return;
+
+    const firstMatch = applyCitationMarks(
+      root,
+      citationHighlight,
+      isDark
+        ? "rounded bg-amber-500/35 px-1 text-amber-100"
+        : "rounded bg-amber-300/60 px-1 text-amber-900",
     );
+
     if (!firstMatch) return;
     firstMatch.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [citationHighlight, isEditing, content]);
+  }, [citationHighlight, isEditing, content, isDark]);
 
   function updateMentionPosition(value: string, selection: number) {
     const mention = getActiveMention(value, selection);
@@ -624,13 +617,7 @@ export function NoteEditor({
                   : "prose-a:text-blue-600"
               }`}
             >
-              {highlightRenderedNode(
-                <Markdown>{content}</Markdown>,
-                citationHighlight,
-                isDark
-                  ? "rounded bg-amber-500/35 px-1 text-amber-100"
-                  : "rounded bg-amber-300/60 px-1 text-amber-900",
-              )}
+              <Markdown>{content}</Markdown>
             </article>
           </div>
         )}
