@@ -94,11 +94,13 @@ export default async function NotePage({
 
   // 2. Find Related Notes (The AI "Second Brain" Magic)
   // We use the embedding of the CURRENT note to find others like it
-  const { data: relatedNotes } = await supabase.rpc("match_notes", {
-    query_embedding: note.embedding, // Use this note's vector
-    match_threshold: 0.5, // 50% similarity or higher
-    match_count: 4, // Top 4 matches
-  });
+  const { data: relatedNotes } = note.embedding
+    ? await supabase.rpc("match_notes", {
+        query_embedding: note.embedding, // Use this note's vector
+        match_threshold: 0.5, // 50% similarity or higher
+        match_count: 4, // Top 4 matches
+      })
+    : { data: [] };
 
   // Filter out the current note from the related list
   const filteredRelated =

@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { getTierConfig } from "@/lib/tiers";
+import { after } from "next/server";
 
 // Initialize Gemini Client
 const genAI = new GoogleGenAI({
@@ -31,6 +32,7 @@ const MAX_CHAT_HISTORY_MESSAGES = 12;
 const MAX_CHAT_HISTORY_CHARS = 4000;
 const KEYWORD_FALLBACK_NOTE_CANDIDATES = 200;
 const KEYWORD_FALLBACK_MATCH_COUNT = 5;
+const BACKGROUND_EMBED_BATCH_SIZE = 8;
 
 // --- HELPER FUNCTIONS ---
 
@@ -393,6 +395,98 @@ async function fetchKeywordFallbackNotes(
   );
 }
 
+function isCreditLimitError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes("Monthly AI credit limit");
+}
+
+async function processSinglePendingEmbedding(
+  supabase: SupabaseClient,
+  userId: string,
+  noteId: string,
+  content: string,
+) {
+  const normalizedContent = content.trim();
+  if (!normalizedContent) return false;
+
+  await assertCreditsAvailable(supabase, userId);
+
+  const result = await genAI.models.embedContent({
+    model: EMBEDDING_MODEL,
+    contents: normalizedContent,
+    config: { outputDimensionality: 768 },
+  });
+
+  const vector = extractEmbedding(result);
+  if (!vector) throw new Error("Failed to generate embedding");
+
+  // Update only if content still matches and embedding is still pending.
+  const { data: updatedRows, error: updateError } = await supabase
+    .from("notes")
+    .update({ embedding: vector })
+    .eq("id", noteId)
+    .eq("user_id", userId)
+    .eq("content", content)
+    .is("embedding", null)
+    .select("id");
+
+  if (updateError) throw new Error(updateError.message);
+  if (!updatedRows || updatedRows.length === 0) return false;
+
+  // Charge only after successful write to avoid double-charging duplicate workers.
+  await checkCredits(supabase, userId);
+
+  revalidatePath("/dashboard/notes");
+  revalidatePath(`/dashboard/notes/${noteId}`);
+
+  return true;
+}
+
+async function processPendingEmbeddingsForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  maxJobs = BACKGROUND_EMBED_BATCH_SIZE,
+) {
+  const { data, error } = await supabase
+    .from("notes")
+    .select("id, content")
+    .eq("user_id", userId)
+    .is("embedding", null)
+    .order("created_at", { ascending: true })
+    .limit(maxJobs);
+
+  if (error) throw new Error(error.message);
+  const pendingNotes = (data as { id: string; content: string }[] | null) || [];
+
+  for (const note of pendingNotes) {
+    try {
+      await processSinglePendingEmbedding(
+        supabase,
+        userId,
+        String(note.id),
+        String(note.content || ""),
+      );
+    } catch (jobError) {
+      console.error("Background embedding job failed:", jobError);
+      if (isCreditLimitError(jobError)) break;
+    }
+  }
+}
+
+function scheduleEmbeddingDrain(
+  supabase: SupabaseClient,
+  userId: string,
+  maxJobs = BACKGROUND_EMBED_BATCH_SIZE,
+) {
+  after(async () => {
+    try {
+      await processPendingEmbeddingsForUser(supabase, userId, maxJobs);
+    } catch (error) {
+      console.error("Background embedding queue failed:", error);
+    }
+  });
+}
+
 function parseTagsInput(raw: FormDataEntryValue | null) {
   if (!raw || typeof raw !== "string") return [];
   const trimmed = raw.trim();
@@ -557,27 +651,17 @@ export async function addNote(formData: FormData) {
     await checkCharLimit(supabase, user.id, content);
     await assertCreditsAvailable(supabase, user.id);
 
-    // Generate Embedding
-    const result = await genAI.models.embedContent({
-      model: EMBEDDING_MODEL,
-      contents: content,
-      config: { outputDimensionality: 768 },
-    });
-
-    const vector = extractEmbedding(result);
-    if (!vector) return { error: "Failed to generate embedding" };
-
-    await checkCredits(supabase, user.id); // Deduct credit after embed success
-
-    // Save to DB
+    // Save immediately, then index in the background queue.
     const { error } = await supabase.from("notes").insert({
       user_id: user.id,
       content: content,
-      embedding: vector,
+      embedding: null,
       tags,
     });
 
     if (error) throw new Error(error.message);
+
+    scheduleEmbeddingDrain(supabase, user.id, BACKGROUND_EMBED_BATCH_SIZE);
 
     revalidatePath("/dashboard/notes");
     return { success: true };
@@ -596,6 +680,7 @@ export async function searchNotes(query: string) {
   } = await supabase.auth.getUser();
 
   if (!user) return [];
+  scheduleEmbeddingDrain(supabase, user.id, 2);
 
   try {
     const result = await genAI.models.embedContent({
@@ -675,26 +760,15 @@ export async function updateNote(formData: FormData) {
     // 3. Pre-check credit availability before embedding
     await assertCreditsAvailable(supabase, user.id);
 
-    // 4. Generate NEW Embedding
-    const result = await genAI.models.embedContent({
-      model: EMBEDDING_MODEL,
-      contents: content,
-      config: { outputDimensionality: 768 },
-    });
-
-    const vector = extractEmbedding(result);
-    if (!vector) return { error: "Failed to generate embedding" };
-
-    // 5. Deduct Credit (Re-embedding costs money!)
-    await checkCredits(supabase, user.id);
-
-    // 6. Update DB
+    // 4. Update immediately, then re-index in the background queue.
     const { error } = await supabase
       .from("notes")
-      .update({ content, embedding: vector, tags })
+      .update({ content, embedding: null, tags })
       .eq("id", noteId);
 
     if (error) throw error;
+
+    scheduleEmbeddingDrain(supabase, user.id, BACKGROUND_EMBED_BATCH_SIZE);
 
     revalidatePath(`/dashboard/notes/${noteId}`);
     revalidatePath("/dashboard/notes");
@@ -714,6 +788,7 @@ export async function chatWithBrain(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { answer: "Please log in.", sources: [] };
+  scheduleEmbeddingDrain(supabase, user.id, 2);
 
   try {
     // 1. Pre-check credit availability before embedding
@@ -1067,45 +1142,54 @@ export async function importNotes(formData: FormData) {
     };
   }
 
-  let imported = 0;
+  let notesToInsert: {
+    user_id: string;
+    content: string;
+    embedding: null;
+    tags: string[];
+  }[] = [];
   try {
-    for (const note of cleanedNotes) {
+    notesToInsert = cleanedNotes.map((note) => {
       if (note.content.length > maxChars) {
-        throw new Error(
-          `Note too long. Max length is ${maxChars} characters.`,
-        );
+        throw new Error(`Note too long. Max length is ${maxChars} characters.`);
       }
 
-      const result = await genAI.models.embedContent({
-        model: EMBEDDING_MODEL,
-        contents: note.content,
-        config: { outputDimensionality: 768 },
-      });
-
-      const vector = extractEmbedding(result);
-      if (!vector) throw new Error("Failed to generate embedding.");
-
-      await checkCredits(supabase, user.id);
-
-      const { error } = await supabase.from("notes").insert({
+      return {
         user_id: user.id,
         content: note.content,
-        embedding: vector,
+        embedding: null,
         tags: note.tags,
-      });
-
-      if (error) throw new Error(error.message);
-      imported += 1;
-    }
+      };
+    });
   } catch (err) {
     return {
       error: err instanceof Error ? err.message : "Import failed",
-      imported,
+      imported: 0,
     };
   }
 
+  const { error: insertError } = await supabase
+    .from("notes")
+    .insert(notesToInsert);
+
+  if (insertError) {
+    return {
+      error: insertError.message,
+      imported: 0,
+    };
+  }
+
+  scheduleEmbeddingDrain(
+    supabase,
+    user.id,
+    Math.min(
+      BACKGROUND_EMBED_BATCH_SIZE + notesToInsert.length,
+      MAX_IMPORT_NOTES,
+    ),
+  );
+
   revalidatePath("/dashboard/notes");
-  return { success: true, imported };
+  return { success: true, imported: notesToInsert.length };
 }
 
 // 8. Auth Actions (Standard)
