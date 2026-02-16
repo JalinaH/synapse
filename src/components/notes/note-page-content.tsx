@@ -30,6 +30,7 @@ interface NotePageContentProps {
   outgoingLinks: LinkNote[];
   backlinks: LinkNote[];
   maxChars: number;
+  highlightText?: string;
 }
 
 export function NotePageContent({
@@ -38,6 +39,7 @@ export function NotePageContent({
   outgoingLinks,
   backlinks,
   maxChars,
+  highlightText,
 }: NotePageContentProps) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
@@ -58,7 +60,7 @@ export function NotePageContent({
         </Link>
 
         {/* We pass the note data to the Client Component */}
-        <NoteEditor note={note} maxChars={maxChars} />
+        <NoteEditor note={note} maxChars={maxChars} highlightText={highlightText} />
       </div>
 
       {/* RIGHT COLUMN: AI Sidebar */}

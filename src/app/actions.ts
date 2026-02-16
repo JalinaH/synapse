@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { getTierConfig } from "@/lib/tiers";
+import { after } from "next/server";
 
 // Initialize Gemini Client
 const genAI = new GoogleGenAI({
@@ -14,6 +15,8 @@ const genAI = new GoogleGenAI({
 
 const CREDIT_RESET_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_CREDIT_UPDATE_ATTEMPTS = 3;
+const EMBEDDING_MODEL =
+  process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
 const MAX_SUMMARY_CONTEXT_CHARS = 20000;
 const MAX_SUMMARY_NOTES = 100;
 const MAX_SYNTHESIS_CONTEXT_CHARS = 20000;
@@ -21,6 +24,15 @@ const MAX_SYNTHESIS_NOTES = 40;
 const SYNTHESIS_MATCH_COUNT = 15;
 const SYNTHESIS_MATCH_THRESHOLD = 0.2;
 const MAX_IMPORT_NOTES = 50;
+const MAX_CITATION_SNIPPET_CHARS = 180;
+const MAX_CITATION_HIGHLIGHT_CHARS = 96;
+const MAX_CITATION_TERMS = 12;
+const MIN_CITATION_TERM_CHARS = 3;
+const MAX_CHAT_HISTORY_MESSAGES = 12;
+const MAX_CHAT_HISTORY_CHARS = 4000;
+const KEYWORD_FALLBACK_NOTE_CANDIDATES = 200;
+const KEYWORD_FALLBACK_MATCH_COUNT = 5;
+const BACKGROUND_EMBED_BATCH_SIZE = 8;
 
 // --- HELPER FUNCTIONS ---
 
@@ -33,6 +45,34 @@ type CreditProfile = {
   tier?: string | null;
   credits_used?: number | null;
   billing_start_date?: string | null;
+};
+
+type SourceNote = {
+  id?: string | null;
+  content?: string | null;
+  similarity?: number | null;
+};
+
+type CitationSource = {
+  id: string;
+  content: string;
+  similarity: number;
+  snippet: string;
+  highlight: string;
+};
+
+type KeywordCandidateNote = {
+  id: string;
+  content: string;
+  created_at?: string | null;
+};
+
+type KeywordScoredNote = {
+  id: string;
+  content: string;
+  similarity: number;
+  score: number;
+  createdAt: number;
 };
 
 function extractEmbedding(result: EmbeddingResponse) {
@@ -149,6 +189,313 @@ function mergeNotesById<T extends { id?: string | null }>(...lists: T[][]) {
   }
 
   return merged;
+}
+
+function normalizeWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function findCaseInsensitiveIndex(text: string, query: string) {
+  if (!query) return -1;
+  return text.toLowerCase().indexOf(query.toLowerCase());
+}
+
+function getCitationTerms(question: string) {
+  const terms = question.toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+  const unique = Array.from(new Set(terms.map((term) => term.trim())));
+  unique.sort((a, b) => b.length - a.length);
+  return unique.slice(0, MAX_CITATION_TERMS);
+}
+
+function pickHighlightText(content: string, question: string) {
+  const cleanedContent = normalizeWhitespace(content);
+  if (!cleanedContent) return "";
+
+  const normalizedQuestion = normalizeWhitespace(question);
+  if (
+    normalizedQuestion.length >= MIN_CITATION_TERM_CHARS &&
+    normalizedQuestion.length <= MAX_CITATION_HIGHLIGHT_CHARS
+  ) {
+    const fullMatchIndex = findCaseInsensitiveIndex(
+      cleanedContent,
+      normalizedQuestion,
+    );
+    if (fullMatchIndex >= 0) {
+      return cleanedContent.slice(
+        fullMatchIndex,
+        fullMatchIndex + normalizedQuestion.length,
+      );
+    }
+  }
+
+  const terms = getCitationTerms(normalizedQuestion);
+  for (const term of terms) {
+    if (term.length < MIN_CITATION_TERM_CHARS) continue;
+    const termIndex = findCaseInsensitiveIndex(cleanedContent, term);
+    if (termIndex >= 0) {
+      return cleanedContent.slice(termIndex, termIndex + term.length);
+    }
+  }
+
+  return cleanedContent.slice(0, MAX_CITATION_HIGHLIGHT_CHARS);
+}
+
+function buildCitationSnippet(content: string, highlight: string) {
+  const cleanedContent = normalizeWhitespace(content);
+  if (!cleanedContent) return "";
+
+  const normalizedHighlight = normalizeWhitespace(highlight);
+  if (!normalizedHighlight) {
+    const preview = cleanedContent.slice(0, MAX_CITATION_SNIPPET_CHARS).trim();
+    return cleanedContent.length > preview.length ? `${preview}...` : preview;
+  }
+
+  const matchIndex = findCaseInsensitiveIndex(cleanedContent, normalizedHighlight);
+  if (matchIndex === -1) {
+    const preview = cleanedContent.slice(0, MAX_CITATION_SNIPPET_CHARS).trim();
+    return cleanedContent.length > preview.length ? `${preview}...` : preview;
+  }
+
+  const remainingChars = Math.max(
+    MAX_CITATION_SNIPPET_CHARS - normalizedHighlight.length,
+    0,
+  );
+  const start = Math.max(matchIndex - Math.floor(remainingChars / 2), 0);
+  const end = Math.min(start + MAX_CITATION_SNIPPET_CHARS, cleanedContent.length);
+
+  let snippet = cleanedContent.slice(start, end).trim();
+  if (start > 0) snippet = `...${snippet}`;
+  if (end < cleanedContent.length) snippet = `${snippet}...`;
+  return snippet;
+}
+
+function buildCitationSources(notes: SourceNote[], question: string) {
+  const sources: CitationSource[] = [];
+  const seenIds = new Set<string>();
+
+  for (const note of notes) {
+    const id = note.id ? String(note.id) : "";
+    const content = normalizeWhitespace(String(note.content || ""));
+    if (!id || !content || seenIds.has(id)) continue;
+    seenIds.add(id);
+
+    const highlightCandidate = pickHighlightText(content, question);
+    const snippet = buildCitationSnippet(content, highlightCandidate);
+    const highlight = normalizeWhitespace(
+      highlightCandidate || snippet.slice(0, MAX_CITATION_HIGHLIGHT_CHARS),
+    );
+
+    sources.push({
+      id,
+      content,
+      similarity:
+        typeof note.similarity === "number" && Number.isFinite(note.similarity)
+          ? note.similarity
+          : 0,
+      snippet,
+      highlight,
+    });
+  }
+
+  return sources;
+}
+
+function buildHistoryContext(
+  history: { role: string; content: string }[],
+  maxMessages: number,
+  maxChars: number,
+) {
+  if (!Array.isArray(history) || history.length === 0) return "";
+
+  const recent = history.slice(-maxMessages);
+  const chunks: string[] = [];
+  let total = 0;
+
+  for (const message of recent) {
+    const role = message.role === "assistant" ? "Assistant" : "User";
+    const content = normalizeWhitespace(message.content || "");
+    if (!content) continue;
+    const line = `${role}: ${content}`;
+    if (total + line.length > maxChars) break;
+    chunks.push(line);
+    total += line.length;
+  }
+
+  return chunks.join("\n");
+}
+
+function rankKeywordFallbackNotes(
+  notes: KeywordCandidateNote[],
+  query: string,
+  limit: number,
+) {
+  const normalizedQuery = normalizeWhitespace(query).toLowerCase();
+  const terms = getCitationTerms(normalizedQuery);
+  const scored: KeywordScoredNote[] = [];
+
+  for (const note of notes) {
+    const content = normalizeWhitespace(note.content || "");
+    if (!content) continue;
+    const lowerContent = content.toLowerCase();
+    let score = 0;
+
+    if (normalizedQuery && lowerContent.includes(normalizedQuery)) {
+      score += 6;
+    }
+
+    for (const term of terms) {
+      if (!term || term.length < MIN_CITATION_TERM_CHARS) continue;
+      if (!lowerContent.includes(term)) continue;
+      score += term.length >= 6 ? 1.5 : 1;
+    }
+
+    if (score <= 0) continue;
+
+    scored.push({
+      id: note.id,
+      content,
+      similarity: Math.min(0.2 + score / 12, 0.89),
+      score,
+      createdAt: new Date(note.created_at || 0).getTime() || 0,
+    });
+  }
+
+  return scored
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.createdAt - a.createdAt;
+    })
+    .slice(0, Math.max(1, limit))
+    .map(({ id, content, similarity }) => ({ id, content, similarity }));
+}
+
+async function fetchKeywordFallbackNotes(
+  supabase: SupabaseClient,
+  userId: string,
+  query: string,
+  limit = KEYWORD_FALLBACK_MATCH_COUNT,
+) {
+  const { data, error } = await supabase
+    .from("notes")
+    .select("id, content, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(KEYWORD_FALLBACK_NOTE_CANDIDATES);
+
+  if (error) throw new Error(error.message);
+
+  return rankKeywordFallbackNotes(
+    ((data as KeywordCandidateNote[] | null | undefined) || []).map((note) => ({
+      id: String(note.id),
+      content: String(note.content || ""),
+      created_at: note.created_at || null,
+    })),
+    query,
+    limit,
+  );
+}
+
+function isCreditLimitError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes("Monthly AI credit limit");
+}
+
+async function processSinglePendingEmbedding(
+  supabase: SupabaseClient,
+  userId: string,
+  noteId: string,
+  content: string,
+) {
+  const normalizedContent = content.trim();
+  if (!normalizedContent) return false;
+
+  await assertCreditsAvailable(supabase, userId);
+
+  const result = await genAI.models.embedContent({
+    model: EMBEDDING_MODEL,
+    contents: normalizedContent,
+    config: { outputDimensionality: 768 },
+  });
+
+  const vector = extractEmbedding(result);
+  if (!vector) throw new Error("Failed to generate embedding");
+
+  // Update only if content still matches and embedding is still pending.
+  const { data: updatedRows, error: updateError } = await supabase
+    .from("notes")
+    .update({ embedding: vector })
+    .eq("id", noteId)
+    .eq("user_id", userId)
+    .eq("content", content)
+    .is("embedding", null)
+    .select("id");
+
+  if (updateError) throw new Error(updateError.message);
+  if (!updatedRows || updatedRows.length === 0) return false;
+
+  // Charge after successful write to avoid duplicate-worker double charges.
+  try {
+    await checkCredits(supabase, userId);
+  } catch (creditError) {
+    // Re-queue this note if charging fails so it can retry later.
+    await supabase
+      .from("notes")
+      .update({ embedding: null })
+      .eq("id", noteId)
+      .eq("user_id", userId)
+      .eq("content", content);
+    throw creditError;
+  }
+
+  revalidatePath("/dashboard/notes");
+  revalidatePath(`/dashboard/notes/${noteId}`);
+
+  return true;
+}
+
+async function processPendingEmbeddingsForUser(
+  supabase: SupabaseClient,
+  userId: string,
+  maxJobs = BACKGROUND_EMBED_BATCH_SIZE,
+) {
+  const { data, error } = await supabase
+    .from("notes")
+    .select("id, content")
+    .eq("user_id", userId)
+    .is("embedding", null)
+    .order("created_at", { ascending: true })
+    .limit(maxJobs);
+
+  if (error) throw new Error(error.message);
+  const pendingNotes = (data as { id: string; content: string }[] | null) || [];
+
+  for (const note of pendingNotes) {
+    try {
+      await processSinglePendingEmbedding(
+        supabase,
+        userId,
+        String(note.id),
+        String(note.content || ""),
+      );
+    } catch (jobError) {
+      console.error("Background embedding job failed:", jobError);
+      if (isCreditLimitError(jobError)) break;
+    }
+  }
+}
+
+function scheduleEmbeddingDrain(
+  supabase: SupabaseClient,
+  userId: string,
+  maxJobs = BACKGROUND_EMBED_BATCH_SIZE,
+) {
+  after(async () => {
+    try {
+      await processPendingEmbeddingsForUser(supabase, userId, maxJobs);
+    } catch (error) {
+      console.error("Background embedding queue failed:", error);
+    }
+  });
 }
 
 function parseTagsInput(raw: FormDataEntryValue | null) {
@@ -315,27 +662,17 @@ export async function addNote(formData: FormData) {
     await checkCharLimit(supabase, user.id, content);
     await assertCreditsAvailable(supabase, user.id);
 
-    // Generate Embedding
-    const result = await genAI.models.embedContent({
-      model: "text-embedding-004",
-      contents: content,
-      config: { outputDimensionality: 768 },
-    });
-
-    const vector = extractEmbedding(result);
-    if (!vector) return { error: "Failed to generate embedding" };
-
-    await checkCredits(supabase, user.id); // Deduct credit after embed success
-
-    // Save to DB
+    // Save immediately, then index in the background queue.
     const { error } = await supabase.from("notes").insert({
       user_id: user.id,
       content: content,
-      embedding: vector,
+      embedding: null,
       tags,
     });
 
     if (error) throw new Error(error.message);
+
+    scheduleEmbeddingDrain(supabase, user.id, BACKGROUND_EMBED_BATCH_SIZE);
 
     revalidatePath("/dashboard/notes");
     return { success: true };
@@ -349,10 +686,16 @@ export async function addNote(formData: FormData) {
 // 2. Search Action
 export async function searchNotes(query: string) {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return [];
+  scheduleEmbeddingDrain(supabase, user.id, 2);
 
   try {
     const result = await genAI.models.embedContent({
-      model: "text-embedding-004",
+      model: EMBEDDING_MODEL,
       contents: query,
       config: { outputDimensionality: 768 },
     });
@@ -366,10 +709,21 @@ export async function searchNotes(query: string) {
       match_count: 5,
     });
 
-    return data || [];
+    const relatedNotes =
+      (data as { id: string; content: string; similarity: number }[] | null) ||
+      [];
+
+    if (relatedNotes.length > 0) return relatedNotes;
+
+    return await fetchKeywordFallbackNotes(supabase, user.id, query, 5);
   } catch (error) {
     console.error("Search error:", error);
-    return [];
+    try {
+      return await fetchKeywordFallbackNotes(supabase, user.id, query, 5);
+    } catch (fallbackError) {
+      console.error("Search keyword fallback error:", fallbackError);
+      return [];
+    }
   }
 }
 
@@ -417,26 +771,15 @@ export async function updateNote(formData: FormData) {
     // 3. Pre-check credit availability before embedding
     await assertCreditsAvailable(supabase, user.id);
 
-    // 4. Generate NEW Embedding
-    const result = await genAI.models.embedContent({
-      model: "text-embedding-004",
-      contents: content,
-      config: { outputDimensionality: 768 },
-    });
-
-    const vector = extractEmbedding(result);
-    if (!vector) return { error: "Failed to generate embedding" };
-
-    // 5. Deduct Credit (Re-embedding costs money!)
-    await checkCredits(supabase, user.id);
-
-    // 6. Update DB
+    // 4. Update immediately, then re-index in the background queue.
     const { error } = await supabase
       .from("notes")
-      .update({ content, embedding: vector, tags })
+      .update({ content, embedding: null, tags })
       .eq("id", noteId);
 
     if (error) throw error;
+
+    scheduleEmbeddingDrain(supabase, user.id, BACKGROUND_EMBED_BATCH_SIZE);
 
     revalidatePath(`/dashboard/notes/${noteId}`);
     revalidatePath("/dashboard/notes");
@@ -456,10 +799,16 @@ export async function chatWithBrain(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { answer: "Please log in.", sources: [] };
+  scheduleEmbeddingDrain(supabase, user.id, 2);
 
   try {
     // 1. Pre-check credit availability before embedding
     await assertCreditsAvailable(supabase, user.id);
+    const chatHistoryContext = buildHistoryContext(
+      history,
+      MAX_CHAT_HISTORY_MESSAGES,
+      MAX_CHAT_HISTORY_CHARS,
+    );
 
     const wantsSummary = isSummaryRequest(userQuestion);
     const wantsSynthesis = !wantsSummary && isSynthesisRequest(userQuestion);
@@ -492,11 +841,19 @@ export async function chatWithBrain(
         contents: `
         You are a Second Brain AI. Summarize the user's notes clearly and concisely.
         Provide a short overview and then 3-6 bullet points of key themes.
+        RECENT_CHAT_CONTEXT:
+        ${chatHistoryContext || "None"}
         NOTES: ${contextText}
         `,
       });
 
-      return { answer: response.text || "", sources: notes };
+      return {
+        answer: response.text || "",
+        sources: buildCitationSources(
+          (notes as SourceNote[] | null | undefined) || [],
+          userQuestion,
+        ),
+      };
     }
 
     if (wantsSynthesis) {
@@ -505,7 +862,7 @@ export async function chatWithBrain(
 
       try {
         const result = await genAI.models.embedContent({
-          model: "text-embedding-004",
+          model: EMBEDDING_MODEL,
           contents: userQuestion,
           config: { outputDimensionality: 768 },
         });
@@ -562,37 +919,63 @@ export async function chatWithBrain(
         contents: `
         You are a Second Brain AI. Use the notes below to synthesize an answer.
         If the user asks for a plan, propose a concise, practical plan.
+        RECENT_CHAT_CONTEXT:
+        ${chatHistoryContext || "None"}
         NOTES: ${contextText}
         QUESTION: ${userQuestion}
         `,
       });
 
-      return { answer: response.text || "", sources: mergedNotes };
+      return {
+        answer: response.text || "",
+        sources: buildCitationSources(
+          mergedNotes as SourceNote[],
+          userQuestion,
+        ),
+      };
     }
 
-    // 2. Embed Question
-    const result = await genAI.models.embedContent({
-      model: "text-embedding-004",
-      contents: userQuestion,
-      config: { outputDimensionality: 768 },
-    });
+    let relatedNotes: { id: string; content: string; similarity?: number }[] =
+      [];
 
-    const vector = extractEmbedding(result);
-    if (!vector) {
-      return { answer: "Failed to generate embedding.", sources: [] };
+    try {
+      // 2. Embed Question
+      const result = await genAI.models.embedContent({
+        model: EMBEDDING_MODEL,
+        contents: userQuestion,
+        config: { outputDimensionality: 768 },
+      });
+
+      const vector = extractEmbedding(result);
+
+      if (vector) {
+        // 3. Find relevant notes
+        const { data, error } = await supabase.rpc("match_notes", {
+          query_embedding: vector,
+          match_threshold: 0.3,
+          match_count: 5,
+        });
+
+        if (error) throw new Error("Database error");
+
+        relatedNotes =
+          (data as { id: string; content: string; similarity?: number }[]) || [];
+      }
+    } catch (retrievalError) {
+      console.error("Chat embedding retrieval error:", retrievalError);
     }
 
-    // 3. Deduct Credit (Chatting costs money!)
+    if (!relatedNotes.length) {
+      relatedNotes = await fetchKeywordFallbackNotes(
+        supabase,
+        user.id,
+        userQuestion,
+        5,
+      );
+    }
+
+    // 4. Deduct Credit (Chatting costs money!)
     await checkCredits(supabase, user.id);
-
-    // 4. Find relevant notes
-    const { data: relatedNotes, error } = await supabase.rpc("match_notes", {
-      query_embedding: vector,
-      match_threshold: 0.3,
-      match_count: 5,
-    });
-
-    if (error) throw new Error("Database error");
 
     // 5. Construct Context
     type RelatedNote = { content: string };
@@ -606,12 +989,20 @@ export async function chatWithBrain(
       model: "gemini-2.5-flash",
       contents: `
       You are a Second Brain AI. Answer using the Context below.
+      RECENT_CHAT_CONTEXT:
+      ${chatHistoryContext || "None"}
       CONTEXT: ${contextText}
       QUESTION: ${userQuestion}
       `,
     });
 
-    return { answer: response.text || "", sources: relatedNotes };
+    return {
+      answer: response.text || "",
+      sources: buildCitationSources(
+        (relatedNotes as SourceNote[] | null | undefined) || [],
+        userQuestion,
+      ),
+    };
   } catch (err) {
     console.error(err);
     return {
@@ -762,45 +1153,54 @@ export async function importNotes(formData: FormData) {
     };
   }
 
-  let imported = 0;
+  let notesToInsert: {
+    user_id: string;
+    content: string;
+    embedding: null;
+    tags: string[];
+  }[] = [];
   try {
-    for (const note of cleanedNotes) {
+    notesToInsert = cleanedNotes.map((note) => {
       if (note.content.length > maxChars) {
-        throw new Error(
-          `Note too long. Max length is ${maxChars} characters.`,
-        );
+        throw new Error(`Note too long. Max length is ${maxChars} characters.`);
       }
 
-      const result = await genAI.models.embedContent({
-        model: "text-embedding-004",
-        contents: note.content,
-        config: { outputDimensionality: 768 },
-      });
-
-      const vector = extractEmbedding(result);
-      if (!vector) throw new Error("Failed to generate embedding.");
-
-      await checkCredits(supabase, user.id);
-
-      const { error } = await supabase.from("notes").insert({
+      return {
         user_id: user.id,
         content: note.content,
-        embedding: vector,
+        embedding: null,
         tags: note.tags,
-      });
-
-      if (error) throw new Error(error.message);
-      imported += 1;
-    }
+      };
+    });
   } catch (err) {
     return {
       error: err instanceof Error ? err.message : "Import failed",
-      imported,
+      imported: 0,
     };
   }
 
+  const { error: insertError } = await supabase
+    .from("notes")
+    .insert(notesToInsert);
+
+  if (insertError) {
+    return {
+      error: insertError.message,
+      imported: 0,
+    };
+  }
+
+  scheduleEmbeddingDrain(
+    supabase,
+    user.id,
+    Math.min(
+      BACKGROUND_EMBED_BATCH_SIZE + notesToInsert.length,
+      MAX_IMPORT_NOTES,
+    ),
+  );
+
   revalidatePath("/dashboard/notes");
-  return { success: true, imported };
+  return { success: true, imported: notesToInsert.length };
 }
 
 // 8. Auth Actions (Standard)

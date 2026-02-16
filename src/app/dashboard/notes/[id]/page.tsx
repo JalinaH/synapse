@@ -23,9 +23,23 @@ function extractLinkedIds(content: string) {
   return Array.from(new Set(ids));
 }
 
-export default async function NotePage({ params }: { params: { id: string } }) {
+export default async function NotePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<{ highlight?: string | string[] }>;
+}) {
   const supabase = await createClient();
   const { id } = await params;
+  const resolvedSearchParams = await searchParams;
+  const highlightParam = resolvedSearchParams?.highlight;
+  const highlightText =
+    typeof highlightParam === "string"
+      ? highlightParam.trim().slice(0, 160)
+      : Array.isArray(highlightParam)
+        ? String(highlightParam[0] || "").trim().slice(0, 160)
+        : "";
 
   const {
     data: { user },
@@ -80,11 +94,13 @@ export default async function NotePage({ params }: { params: { id: string } }) {
 
   // 2. Find Related Notes (The AI "Second Brain" Magic)
   // We use the embedding of the CURRENT note to find others like it
-  const { data: relatedNotes } = await supabase.rpc("match_notes", {
-    query_embedding: note.embedding, // Use this note's vector
-    match_threshold: 0.5, // 50% similarity or higher
-    match_count: 4, // Top 4 matches
-  });
+  const { data: relatedNotes } = note.embedding
+    ? await supabase.rpc("match_notes", {
+        query_embedding: note.embedding, // Use this note's vector
+        match_threshold: 0.5, // 50% similarity or higher
+        match_count: 4, // Top 4 matches
+      })
+    : { data: [] };
 
   // Filter out the current note from the related list
   const filteredRelated =
@@ -98,6 +114,7 @@ export default async function NotePage({ params }: { params: { id: string } }) {
       outgoingLinks={(outgoingLinks as LinkNote[] | null) || []}
       backlinks={backlinks}
       maxChars={maxChars}
+      highlightText={highlightText}
     />
   );
 }
