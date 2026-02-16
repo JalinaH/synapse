@@ -24,15 +24,15 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-RUN groupadd --system --gid 1001 nodejs \
-    && useradd --system --uid 1001 --gid nodejs nextjs
+RUN groupadd --system --gid 10001 nodejs \
+    && useradd --system --uid 10001 --gid 10001 nextjs
 
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
 
-USER nextjs
+USER 10001
 EXPOSE 3000
 
 CMD ["node", "node_modules/next/dist/bin/next", "start"]
