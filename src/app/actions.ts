@@ -433,8 +433,19 @@ async function processSinglePendingEmbedding(
   if (updateError) throw new Error(updateError.message);
   if (!updatedRows || updatedRows.length === 0) return false;
 
-  // Charge only after successful write to avoid double-charging duplicate workers.
-  await checkCredits(supabase, userId);
+  // Charge after successful write to avoid duplicate-worker double charges.
+  try {
+    await checkCredits(supabase, userId);
+  } catch (creditError) {
+    // Re-queue this note if charging fails so it can retry later.
+    await supabase
+      .from("notes")
+      .update({ embedding: null })
+      .eq("id", noteId)
+      .eq("user_id", userId)
+      .eq("content", content);
+    throw creditError;
+  }
 
   revalidatePath("/dashboard/notes");
   revalidatePath(`/dashboard/notes/${noteId}`);
