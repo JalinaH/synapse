@@ -86,16 +86,26 @@ async function processSinglePendingEmbedding(
   const normalizedContent = content.trim();
   if (!normalizedContent) return false;
 
-  await assertCreditsAvailable(supabase, userId);
+  // Reserve credit atomically BEFORE doing expensive API work.
+  await checkCredits(supabase, userId);
 
-  const result = await genAI.models.embedContent({
-    model: EMBEDDING_MODEL,
-    contents: normalizedContent,
-    config: { outputDimensionality: 768 },
-  });
+  let result;
+  try {
+    result = await genAI.models.embedContent({
+      model: EMBEDDING_MODEL,
+      contents: normalizedContent,
+      config: { outputDimensionality: 768 },
+    });
+  } catch (apiError) {
+    await refundCredit(supabase, userId);
+    throw apiError;
+  }
 
   const vector = extractEmbedding(result);
-  if (!vector) throw new Error("Failed to generate embedding");
+  if (!vector) {
+    await refundCredit(supabase, userId);
+    throw new Error("Failed to generate embedding");
+  }
 
   // Update only if content still matches and embedding is still pending.
   const { data: updatedRows, error: updateError } = await supabase
@@ -107,21 +117,14 @@ async function processSinglePendingEmbedding(
     .is("embedding", null)
     .select("id");
 
-  if (updateError) throw new Error(updateError.message);
-  if (!updatedRows || updatedRows.length === 0) return false;
-
-  // Charge after successful write to avoid duplicate-worker double charges.
-  try {
-    await checkCredits(supabase, userId);
-  } catch (creditError) {
-    // Re-queue this note if charging fails so it can retry later.
-    await supabase
-      .from("notes")
-      .update({ embedding: null })
-      .eq("id", noteId)
-      .eq("user_id", userId)
-      .eq("content", content);
-    throw creditError;
+  if (updateError) {
+    await refundCredit(supabase, userId);
+    throw new Error(updateError.message);
+  }
+  // Another worker already processed this note — refund the reserved credit.
+  if (!updatedRows || updatedRows.length === 0) {
+    await refundCredit(supabase, userId);
+    return false;
   }
 
   revalidatePath("/dashboard/notes");
@@ -256,6 +259,32 @@ async function checkCredits(supabase: SupabaseClient, userId: string) {
   }
 
   throw new Error("Unable to update credits. Please retry.");
+}
+
+// Refund a single credit (best-effort, used when work fails after reservation)
+async function refundCredit(supabase: SupabaseClient, userId: string) {
+  for (let attempt = 0; attempt < MAX_CREDIT_UPDATE_ATTEMPTS; attempt += 1) {
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("credits_used")
+      .eq("id", userId)
+      .single();
+
+    if (error || !profile) return; // best-effort: don't throw on refund failure
+
+    const currentUsage =
+      typeof profile.credits_used === "number" ? profile.credits_used : 0;
+    if (currentUsage <= 0) return;
+
+    const { data: updatedRows } = await supabase
+      .from("profiles")
+      .update({ credits_used: currentUsage - 1 })
+      .eq("id", userId)
+      .eq("credits_used", currentUsage)
+      .select("credits_used");
+
+    if (updatedRows && updatedRows.length > 0) return;
+  }
 }
 
 // Check 2: Storage Limit
@@ -465,8 +494,9 @@ export async function chatWithBrain(
   scheduleEmbeddingDrain(supabase, user.id, 2);
 
   try {
-    // 1. Pre-check credit availability before embedding
-    await assertCreditsAvailable(supabase, user.id);
+    // 1. Reserve credit atomically BEFORE doing any work.
+    //    Prevents concurrent requests from bypassing limits.
+    await checkCredits(supabase, user.id);
     const chatHistoryContext = buildHistoryContext(
       history,
       MAX_CHAT_HISTORY_MESSAGES,
@@ -487,17 +517,16 @@ export async function chatWithBrain(
       if (error) throw new Error(error.message);
 
       if (!notes || notes.length === 0) {
+        await refundCredit(supabase, user.id);
         return { answer: "You don't have any notes to summarize yet.", sources: [] };
       }
 
       const contextText = buildSummaryContext(notes, MAX_SUMMARY_CONTEXT_CHARS);
 
       if (!contextText) {
+        await refundCredit(supabase, user.id);
         return { answer: "I couldn't find any note content to summarize.", sources: [] };
       }
-
-      // Deduct Credit (Chatting costs money!)
-      await checkCredits(supabase, user.id);
 
       const response = await genAI.models.generateContent({
         model: "gemini-2.5-flash",
@@ -562,6 +591,7 @@ export async function chatWithBrain(
       );
 
       if (!mergedNotes.length) {
+        await refundCredit(supabase, user.id);
         return { answer: "You don't have any notes to use yet.", sources: [] };
       }
 
@@ -571,11 +601,9 @@ export async function chatWithBrain(
       );
 
       if (!contextText) {
+        await refundCredit(supabase, user.id);
         return { answer: "I couldn't build a context from your notes.", sources: [] };
       }
-
-      // Deduct Credit (Chatting costs money!)
-      await checkCredits(supabase, user.id);
 
       const response = await genAI.models.generateContent({
         model: "gemini-2.5-flash",
@@ -637,8 +665,7 @@ export async function chatWithBrain(
       );
     }
 
-    // 4. Deduct Credit (Chatting costs money!)
-    await checkCredits(supabase, user.id);
+    // 4. Credit already reserved at the top of this function.
 
     // 5. Construct Context
     type RelatedNote = { content: string };
