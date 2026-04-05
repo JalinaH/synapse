@@ -6,14 +6,32 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { getTierConfig } from "@/lib/tiers";
+import { authLimiter, chatLimiter, embeddingLimiter } from "@/lib/rate-limit";
 import { after } from "next/server";
+import { headers } from "next/headers";
+import {
+  extractEmbedding,
+  normalizeTags,
+  resolveCreditState,
+  isSummaryRequest,
+  isSynthesisRequest,
+  buildSummaryContext,
+  mergeNotesById,
+  buildCitationSources,
+  buildHistoryContext,
+  rankKeywordFallbackNotes,
+  parseTagsInput,
+  MAX_CHAT_HISTORY_MESSAGES,
+  MAX_CHAT_HISTORY_CHARS,
+  type SourceNote,
+  type KeywordCandidateNote,
+} from "@/lib/helpers";
 
 // Initialize Gemini Client
 const genAI = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY!,
 });
 
-const CREDIT_RESET_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_CREDIT_UPDATE_ATTEMPTS = 3;
 const EMBEDDING_MODEL =
   process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
@@ -24,350 +42,9 @@ const MAX_SYNTHESIS_NOTES = 40;
 const SYNTHESIS_MATCH_COUNT = 15;
 const SYNTHESIS_MATCH_THRESHOLD = 0.2;
 const MAX_IMPORT_NOTES = 50;
-const MAX_CITATION_SNIPPET_CHARS = 180;
-const MAX_CITATION_HIGHLIGHT_CHARS = 96;
-const MAX_CITATION_TERMS = 12;
-const MIN_CITATION_TERM_CHARS = 3;
-const MAX_CHAT_HISTORY_MESSAGES = 12;
-const MAX_CHAT_HISTORY_CHARS = 4000;
 const KEYWORD_FALLBACK_NOTE_CANDIDATES = 200;
 const KEYWORD_FALLBACK_MATCH_COUNT = 5;
 const BACKGROUND_EMBED_BATCH_SIZE = 8;
-
-// --- HELPER FUNCTIONS ---
-
-type EmbeddingResponse = {
-  embedding?: { values?: number[] };
-  embeddings?: { values?: number[] }[];
-};
-
-type CreditProfile = {
-  tier?: string | null;
-  credits_used?: number | null;
-  billing_start_date?: string | null;
-};
-
-type SourceNote = {
-  id?: string | null;
-  content?: string | null;
-  similarity?: number | null;
-};
-
-type CitationSource = {
-  id: string;
-  content: string;
-  similarity: number;
-  snippet: string;
-  highlight: string;
-};
-
-type KeywordCandidateNote = {
-  id: string;
-  content: string;
-  created_at?: string | null;
-};
-
-type KeywordScoredNote = {
-  id: string;
-  content: string;
-  similarity: number;
-  score: number;
-  createdAt: number;
-};
-
-function extractEmbedding(result: EmbeddingResponse) {
-  return result.embedding?.values || result.embeddings?.[0]?.values;
-}
-
-function normalizeTagValue(tag: string) {
-  return tag
-    .trim()
-    .replace(/^#+/, "")
-    .replace(/\s+/g, "-")
-    .toLowerCase();
-}
-
-function normalizeTags(tags: string[]) {
-  const normalized = tags.map(normalizeTagValue).filter(Boolean);
-  return Array.from(new Set(normalized));
-}
-
-function resolveCreditState(profile: CreditProfile, now: Date) {
-  const { tier, credits: limit } = getTierConfig(profile.tier);
-  const currentUsage =
-    typeof profile.credits_used === "number" ? profile.credits_used : 0;
-  const billingStartRaw = profile.billing_start_date;
-  const billingStartDate = billingStartRaw ? new Date(billingStartRaw) : null;
-  const hasValidBillingStart =
-    billingStartDate && !Number.isNaN(billingStartDate.getTime());
-  const isNewCycle =
-    !hasValidBillingStart ||
-    now.getTime() - billingStartDate.getTime() > CREDIT_RESET_MS;
-  const normalizedUsage = isNewCycle ? 0 : currentUsage;
-  const nextBillingStart = isNewCycle
-    ? now.toISOString()
-    : billingStartRaw || now.toISOString();
-
-  return {
-    tier,
-    limit,
-    currentUsage,
-    billingStartRaw,
-    isNewCycle,
-    normalizedUsage,
-    nextBillingStart,
-  };
-}
-
-function isSummaryRequest(question: string) {
-  const normalized = question.trim().toLowerCase();
-  if (!normalized) return false;
-  return (
-    normalized.includes("summarize") ||
-    normalized.includes("summary") ||
-    normalized.includes("recap") ||
-    normalized.includes("overview") ||
-    normalized.includes("all notes") ||
-    normalized.includes("my notes") ||
-    normalized.includes("everything")
-  );
-}
-
-function isSynthesisRequest(question: string) {
-  const normalized = question.trim().toLowerCase();
-  if (!normalized) return false;
-  return (
-    normalized.includes("plan") ||
-    normalized.includes("roadmap") ||
-    normalized.includes("strategy") ||
-    normalized.includes("combine") ||
-    normalized.includes("synthesize") ||
-    normalized.includes("based on my notes") ||
-    normalized.includes("from my notes") ||
-    normalized.includes("across my notes") ||
-    normalized.includes("overall") ||
-    normalized.includes("diet") ||
-    normalized.includes("meal")
-  );
-}
-
-function buildSummaryContext(
-  notes: { content: string }[],
-  maxChars: number,
-) {
-  let total = 0;
-  const chunks: string[] = [];
-
-  for (const note of notes) {
-    if (!note.content) continue;
-    const next = note.content.trim();
-    if (!next) continue;
-    if (total + next.length > maxChars) break;
-    chunks.push(next);
-    total += next.length;
-  }
-
-  return chunks.join("\n---\n");
-}
-
-function mergeNotesById<T extends { id?: string | null }>(...lists: T[][]) {
-  const map = new Map<string, T>();
-  const merged: T[] = [];
-
-  for (const list of lists) {
-    for (const item of list) {
-      const key = item.id || "";
-      if (!key) {
-        merged.push(item);
-        continue;
-      }
-      if (!map.has(key)) {
-        map.set(key, item);
-        merged.push(item);
-      }
-    }
-  }
-
-  return merged;
-}
-
-function normalizeWhitespace(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function findCaseInsensitiveIndex(text: string, query: string) {
-  if (!query) return -1;
-  return text.toLowerCase().indexOf(query.toLowerCase());
-}
-
-function getCitationTerms(question: string) {
-  const terms = question.toLowerCase().match(/[a-z0-9]{3,}/g) || [];
-  const unique = Array.from(new Set(terms.map((term) => term.trim())));
-  unique.sort((a, b) => b.length - a.length);
-  return unique.slice(0, MAX_CITATION_TERMS);
-}
-
-function pickHighlightText(content: string, question: string) {
-  const cleanedContent = normalizeWhitespace(content);
-  if (!cleanedContent) return "";
-
-  const normalizedQuestion = normalizeWhitespace(question);
-  if (
-    normalizedQuestion.length >= MIN_CITATION_TERM_CHARS &&
-    normalizedQuestion.length <= MAX_CITATION_HIGHLIGHT_CHARS
-  ) {
-    const fullMatchIndex = findCaseInsensitiveIndex(
-      cleanedContent,
-      normalizedQuestion,
-    );
-    if (fullMatchIndex >= 0) {
-      return cleanedContent.slice(
-        fullMatchIndex,
-        fullMatchIndex + normalizedQuestion.length,
-      );
-    }
-  }
-
-  const terms = getCitationTerms(normalizedQuestion);
-  for (const term of terms) {
-    if (term.length < MIN_CITATION_TERM_CHARS) continue;
-    const termIndex = findCaseInsensitiveIndex(cleanedContent, term);
-    if (termIndex >= 0) {
-      return cleanedContent.slice(termIndex, termIndex + term.length);
-    }
-  }
-
-  return cleanedContent.slice(0, MAX_CITATION_HIGHLIGHT_CHARS);
-}
-
-function buildCitationSnippet(content: string, highlight: string) {
-  const cleanedContent = normalizeWhitespace(content);
-  if (!cleanedContent) return "";
-
-  const normalizedHighlight = normalizeWhitespace(highlight);
-  if (!normalizedHighlight) {
-    const preview = cleanedContent.slice(0, MAX_CITATION_SNIPPET_CHARS).trim();
-    return cleanedContent.length > preview.length ? `${preview}...` : preview;
-  }
-
-  const matchIndex = findCaseInsensitiveIndex(cleanedContent, normalizedHighlight);
-  if (matchIndex === -1) {
-    const preview = cleanedContent.slice(0, MAX_CITATION_SNIPPET_CHARS).trim();
-    return cleanedContent.length > preview.length ? `${preview}...` : preview;
-  }
-
-  const remainingChars = Math.max(
-    MAX_CITATION_SNIPPET_CHARS - normalizedHighlight.length,
-    0,
-  );
-  const start = Math.max(matchIndex - Math.floor(remainingChars / 2), 0);
-  const end = Math.min(start + MAX_CITATION_SNIPPET_CHARS, cleanedContent.length);
-
-  let snippet = cleanedContent.slice(start, end).trim();
-  if (start > 0) snippet = `...${snippet}`;
-  if (end < cleanedContent.length) snippet = `${snippet}...`;
-  return snippet;
-}
-
-function buildCitationSources(notes: SourceNote[], question: string) {
-  const sources: CitationSource[] = [];
-  const seenIds = new Set<string>();
-
-  for (const note of notes) {
-    const id = note.id ? String(note.id) : "";
-    const content = normalizeWhitespace(String(note.content || ""));
-    if (!id || !content || seenIds.has(id)) continue;
-    seenIds.add(id);
-
-    const highlightCandidate = pickHighlightText(content, question);
-    const snippet = buildCitationSnippet(content, highlightCandidate);
-    const highlight = normalizeWhitespace(
-      highlightCandidate || snippet.slice(0, MAX_CITATION_HIGHLIGHT_CHARS),
-    );
-
-    sources.push({
-      id,
-      content,
-      similarity:
-        typeof note.similarity === "number" && Number.isFinite(note.similarity)
-          ? note.similarity
-          : 0,
-      snippet,
-      highlight,
-    });
-  }
-
-  return sources;
-}
-
-function buildHistoryContext(
-  history: { role: string; content: string }[],
-  maxMessages: number,
-  maxChars: number,
-) {
-  if (!Array.isArray(history) || history.length === 0) return "";
-
-  const recent = history.slice(-maxMessages);
-  const chunks: string[] = [];
-  let total = 0;
-
-  for (const message of recent) {
-    const role = message.role === "assistant" ? "Assistant" : "User";
-    const content = normalizeWhitespace(message.content || "");
-    if (!content) continue;
-    const line = `${role}: ${content}`;
-    if (total + line.length > maxChars) break;
-    chunks.push(line);
-    total += line.length;
-  }
-
-  return chunks.join("\n");
-}
-
-function rankKeywordFallbackNotes(
-  notes: KeywordCandidateNote[],
-  query: string,
-  limit: number,
-) {
-  const normalizedQuery = normalizeWhitespace(query).toLowerCase();
-  const terms = getCitationTerms(normalizedQuery);
-  const scored: KeywordScoredNote[] = [];
-
-  for (const note of notes) {
-    const content = normalizeWhitespace(note.content || "");
-    if (!content) continue;
-    const lowerContent = content.toLowerCase();
-    let score = 0;
-
-    if (normalizedQuery && lowerContent.includes(normalizedQuery)) {
-      score += 6;
-    }
-
-    for (const term of terms) {
-      if (!term || term.length < MIN_CITATION_TERM_CHARS) continue;
-      if (!lowerContent.includes(term)) continue;
-      score += term.length >= 6 ? 1.5 : 1;
-    }
-
-    if (score <= 0) continue;
-
-    scored.push({
-      id: note.id,
-      content,
-      similarity: Math.min(0.2 + score / 12, 0.89),
-      score,
-      createdAt: new Date(note.created_at || 0).getTime() || 0,
-    });
-  }
-
-  return scored
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return b.createdAt - a.createdAt;
-    })
-    .slice(0, Math.max(1, limit))
-    .map(({ id, content, similarity }) => ({ id, content, similarity }));
-}
 
 async function fetchKeywordFallbackNotes(
   supabase: SupabaseClient,
@@ -409,16 +86,26 @@ async function processSinglePendingEmbedding(
   const normalizedContent = content.trim();
   if (!normalizedContent) return false;
 
-  await assertCreditsAvailable(supabase, userId);
+  // Reserve credit atomically BEFORE doing expensive API work.
+  await checkCredits(supabase, userId);
 
-  const result = await genAI.models.embedContent({
-    model: EMBEDDING_MODEL,
-    contents: normalizedContent,
-    config: { outputDimensionality: 768 },
-  });
+  let result;
+  try {
+    result = await genAI.models.embedContent({
+      model: EMBEDDING_MODEL,
+      contents: normalizedContent,
+      config: { outputDimensionality: 768 },
+    });
+  } catch (apiError) {
+    await refundCredit(supabase, userId);
+    throw apiError;
+  }
 
   const vector = extractEmbedding(result);
-  if (!vector) throw new Error("Failed to generate embedding");
+  if (!vector) {
+    await refundCredit(supabase, userId);
+    throw new Error("Failed to generate embedding");
+  }
 
   // Update only if content still matches and embedding is still pending.
   const { data: updatedRows, error: updateError } = await supabase
@@ -430,21 +117,14 @@ async function processSinglePendingEmbedding(
     .is("embedding", null)
     .select("id");
 
-  if (updateError) throw new Error(updateError.message);
-  if (!updatedRows || updatedRows.length === 0) return false;
-
-  // Charge after successful write to avoid duplicate-worker double charges.
-  try {
-    await checkCredits(supabase, userId);
-  } catch (creditError) {
-    // Re-queue this note if charging fails so it can retry later.
-    await supabase
-      .from("notes")
-      .update({ embedding: null })
-      .eq("id", noteId)
-      .eq("user_id", userId)
-      .eq("content", content);
-    throw creditError;
+  if (updateError) {
+    await refundCredit(supabase, userId);
+    throw new Error(updateError.message);
+  }
+  // Another worker already processed this note — refund the reserved credit.
+  if (!updatedRows || updatedRows.length === 0) {
+    await refundCredit(supabase, userId);
+    return false;
   }
 
   revalidatePath("/dashboard/notes");
@@ -498,26 +178,7 @@ function scheduleEmbeddingDrain(
   });
 }
 
-function parseTagsInput(raw: FormDataEntryValue | null) {
-  if (!raw || typeof raw !== "string") return [];
-  const trimmed = raw.trim();
-  if (!trimmed) return [];
 
-  let tags: string[] = [];
-  if (trimmed.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) tags = parsed.filter(Boolean);
-    } catch {
-      tags = [];
-    }
-  } else {
-    tags = trimmed.split(",");
-  }
-
-  const normalized = tags.map((tag) => String(tag).trim()).filter(Boolean);
-  return normalizeTags(normalized);
-}
 
 async function assertCreditsAvailable(
   supabase: SupabaseClient,
@@ -600,6 +261,32 @@ async function checkCredits(supabase: SupabaseClient, userId: string) {
   throw new Error("Unable to update credits. Please retry.");
 }
 
+// Refund a single credit (best-effort, used when work fails after reservation)
+async function refundCredit(supabase: SupabaseClient, userId: string) {
+  for (let attempt = 0; attempt < MAX_CREDIT_UPDATE_ATTEMPTS; attempt += 1) {
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("credits_used")
+      .eq("id", userId)
+      .single();
+
+    if (error || !profile) return; // best-effort: don't throw on refund failure
+
+    const currentUsage =
+      typeof profile.credits_used === "number" ? profile.credits_used : 0;
+    if (currentUsage <= 0) return;
+
+    const { data: updatedRows } = await supabase
+      .from("profiles")
+      .update({ credits_used: currentUsage - 1 })
+      .eq("id", userId)
+      .eq("credits_used", currentUsage)
+      .select("credits_used");
+
+    if (updatedRows && updatedRows.length > 0) return;
+  }
+}
+
 // Check 2: Storage Limit
 async function checkNoteLimit(supabase: SupabaseClient, userId: string) {
   const { data: profile } = await supabase
@@ -655,6 +342,8 @@ export async function addNote(formData: FormData) {
   } = await supabase.auth.getUser();
 
   if (!user) return { error: "Unauthorized" };
+  if (!embeddingLimiter.check(user.id))
+    return { error: "Too many requests. Please slow down." };
 
   try {
     // Perform checks inside try/catch so errors return nicely
@@ -691,6 +380,7 @@ export async function searchNotes(query: string) {
   } = await supabase.auth.getUser();
 
   if (!user) return [];
+  if (!embeddingLimiter.check(user.id)) return [];
   scheduleEmbeddingDrain(supabase, user.id, 2);
 
   try {
@@ -799,11 +489,14 @@ export async function chatWithBrain(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { answer: "Please log in.", sources: [] };
+  if (!chatLimiter.check(user.id))
+    return { answer: "You're sending messages too quickly. Please slow down.", sources: [] };
   scheduleEmbeddingDrain(supabase, user.id, 2);
 
   try {
-    // 1. Pre-check credit availability before embedding
-    await assertCreditsAvailable(supabase, user.id);
+    // 1. Reserve credit atomically BEFORE doing any work.
+    //    Prevents concurrent requests from bypassing limits.
+    await checkCredits(supabase, user.id);
     const chatHistoryContext = buildHistoryContext(
       history,
       MAX_CHAT_HISTORY_MESSAGES,
@@ -824,17 +517,16 @@ export async function chatWithBrain(
       if (error) throw new Error(error.message);
 
       if (!notes || notes.length === 0) {
+        await refundCredit(supabase, user.id);
         return { answer: "You don't have any notes to summarize yet.", sources: [] };
       }
 
       const contextText = buildSummaryContext(notes, MAX_SUMMARY_CONTEXT_CHARS);
 
       if (!contextText) {
+        await refundCredit(supabase, user.id);
         return { answer: "I couldn't find any note content to summarize.", sources: [] };
       }
-
-      // Deduct Credit (Chatting costs money!)
-      await checkCredits(supabase, user.id);
 
       const response = await genAI.models.generateContent({
         model: "gemini-2.5-flash",
@@ -899,6 +591,7 @@ export async function chatWithBrain(
       );
 
       if (!mergedNotes.length) {
+        await refundCredit(supabase, user.id);
         return { answer: "You don't have any notes to use yet.", sources: [] };
       }
 
@@ -908,11 +601,9 @@ export async function chatWithBrain(
       );
 
       if (!contextText) {
+        await refundCredit(supabase, user.id);
         return { answer: "I couldn't build a context from your notes.", sources: [] };
       }
-
-      // Deduct Credit (Chatting costs money!)
-      await checkCredits(supabase, user.id);
 
       const response = await genAI.models.generateContent({
         model: "gemini-2.5-flash",
@@ -974,8 +665,7 @@ export async function chatWithBrain(
       );
     }
 
-    // 4. Deduct Credit (Chatting costs money!)
-    await checkCredits(supabase, user.id);
+    // 4. Credit already reserved at the top of this function.
 
     // 5. Construct Context
     type RelatedNote = { content: string };
@@ -1115,6 +805,8 @@ export async function importNotes(formData: FormData) {
   } = await supabase.auth.getUser();
 
   if (!user) return { error: "Unauthorized" };
+  if (!embeddingLimiter.check(user.id))
+    return { error: "Too many requests. Please slow down." };
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
@@ -1205,6 +897,12 @@ export async function importNotes(formData: FormData) {
 
 // 8. Auth Actions (Standard)
 export async function signUp(formData: FormData) {
+  const ip =
+    (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "unknown";
+  if (!authLimiter.check(ip))
+    return { error: "Too many attempts. Please try again later." };
+
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
   const firstName = formData.get("firstName") as string;
@@ -1228,6 +926,12 @@ export async function signUp(formData: FormData) {
 }
 
 export async function signIn(formData: FormData) {
+  const ip =
+    (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "unknown";
+  if (!authLimiter.check(ip))
+    return { error: "Too many attempts. Please try again later." };
+
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
   const supabase = await createClient();
