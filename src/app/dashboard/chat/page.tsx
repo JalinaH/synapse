@@ -16,6 +16,7 @@ import {
   User,
 } from "lucide-react";
 import Markdown from "react-markdown";
+import rehypeSanitize from "rehype-sanitize";
 import { useTheme } from "@/components/theme-provider";
 
 interface Source {
@@ -627,7 +628,7 @@ export default function ChatPage() {
                         : ""
                   }`}
                 >
-                  <Markdown>{msg.content}</Markdown>
+                  <Markdown rehypePlugins={[rehypeSanitize]}>{msg.content}</Markdown>
                 </div>
 
                 {msg.sources && msg.sources.length > 0 && (
