@@ -6,7 +6,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { getTierConfig } from "@/lib/tiers";
+import { authLimiter, chatLimiter, embeddingLimiter } from "@/lib/rate-limit";
 import { after } from "next/server";
+import { headers } from "next/headers";
 
 // Initialize Gemini Client
 const genAI = new GoogleGenAI({
@@ -655,6 +657,8 @@ export async function addNote(formData: FormData) {
   } = await supabase.auth.getUser();
 
   if (!user) return { error: "Unauthorized" };
+  if (!embeddingLimiter.check(user.id))
+    return { error: "Too many requests. Please slow down." };
 
   try {
     // Perform checks inside try/catch so errors return nicely
@@ -691,6 +695,7 @@ export async function searchNotes(query: string) {
   } = await supabase.auth.getUser();
 
   if (!user) return [];
+  if (!embeddingLimiter.check(user.id)) return [];
   scheduleEmbeddingDrain(supabase, user.id, 2);
 
   try {
@@ -799,6 +804,8 @@ export async function chatWithBrain(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { answer: "Please log in.", sources: [] };
+  if (!chatLimiter.check(user.id))
+    return { answer: "You're sending messages too quickly. Please slow down.", sources: [] };
   scheduleEmbeddingDrain(supabase, user.id, 2);
 
   try {
@@ -1115,6 +1122,8 @@ export async function importNotes(formData: FormData) {
   } = await supabase.auth.getUser();
 
   if (!user) return { error: "Unauthorized" };
+  if (!embeddingLimiter.check(user.id))
+    return { error: "Too many requests. Please slow down." };
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
@@ -1205,6 +1214,12 @@ export async function importNotes(formData: FormData) {
 
 // 8. Auth Actions (Standard)
 export async function signUp(formData: FormData) {
+  const ip =
+    (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "unknown";
+  if (!authLimiter.check(ip))
+    return { error: "Too many attempts. Please try again later." };
+
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
   const firstName = formData.get("firstName") as string;
@@ -1228,6 +1243,12 @@ export async function signUp(formData: FormData) {
 }
 
 export async function signIn(formData: FormData) {
+  const ip =
+    (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "unknown";
+  if (!authLimiter.check(ip))
+    return { error: "Too many attempts. Please try again later." };
+
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
   const supabase = await createClient();
