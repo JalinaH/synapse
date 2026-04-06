@@ -39,29 +39,30 @@ export default async function NotesLibraryPage({
     new Set(selectedTagsRaw.map((tag) => normalizeTag(tag)).filter(Boolean)),
   );
 
-  let notesQuery = supabase
+  // Single query: fetch all notes, then derive tags and apply filter in JS
+  const { data: allNotes } = await supabase
     .from("notes")
     .select("*")
     .order("created_at", { ascending: false });
 
-  if (selectedTags.length > 0) {
-    notesQuery = notesQuery.contains("tags", selectedTags);
-  }
-
-  // Fetch notes (optionally filtered)
-  const { data: notes } = await notesQuery;
-
-  const { data: tagRows } = await supabase.from("notes").select("tags");
   const allTags = Array.from(
     new Set(
-      tagRows
+      allNotes
         ?.flatMap((row) => row.tags || [])
         .map((tag: string) => normalizeTag(tag)) || [],
     ),
   ).sort();
 
-  const totalNotesCount = tagRows?.length || 0;
-  const notesCount = totalNotesCount;
+  const notes =
+    selectedTags.length > 0
+      ? allNotes?.filter((note) =>
+          selectedTags.every((tag) =>
+            note.tags?.map((t: string) => normalizeTag(t)).includes(tag),
+          ),
+        )
+      : allNotes;
+
+  const notesCount = allNotes?.length || 0;
   const filteredCount = notes?.length || 0;
   const { notes: notesLimit } = getTierConfig(profile?.tier);
   const hasNoteLimit = Number.isFinite(notesLimit);
