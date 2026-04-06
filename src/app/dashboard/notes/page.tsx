@@ -1,9 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
-import { Plus, Calendar, ArrowRight } from "lucide-react";
+import { Plus, Calendar, ArrowRight, ChevronLeft, ChevronRight } from "lucide-react";
 import { getTierConfig } from "@/lib/tiers";
 import { TagFilterBar } from "@/components/notes/tag-filter-bar";
 import { ImportExportPanel } from "@/components/notes/import-export-panel";
+
+const PAGE_SIZE = 12;
 
 function normalizeTag(value: string) {
   return value
@@ -16,7 +18,7 @@ function normalizeTag(value: string) {
 export default async function NotesLibraryPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ tag?: string | string[] }>;
+  searchParams?: Promise<{ tag?: string | string[]; page?: string }>;
 }) {
   const supabase = await createClient();
 
@@ -39,37 +41,53 @@ export default async function NotesLibraryPage({
     new Set(selectedTagsRaw.map((tag) => normalizeTag(tag)).filter(Boolean)),
   );
 
-  // Single query: fetch all notes, then derive tags and apply filter in JS
-  const { data: allNotes } = await supabase
+  const page = Math.max(1, parseInt(resolvedSearchParams?.page || "1", 10) || 1);
+  const from = (page - 1) * PAGE_SIZE;
+  const to = from + PAGE_SIZE - 1;
+
+  // Lightweight query for all tags + total count
+  const tagsQuery = supabase.from("notes").select("tags");
+
+  // Paginated query for the current page of notes
+  let notesQuery = supabase
     .from("notes")
-    .select("*")
-    .order("created_at", { ascending: false });
+    .select("*", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (selectedTags.length > 0) {
+    notesQuery = notesQuery.contains("tags", selectedTags);
+  }
+
+  const [{ data: tagRows }, { data: notes, count: filteredCount }] =
+    await Promise.all([tagsQuery, notesQuery]);
 
   const allTags = Array.from(
     new Set(
-      allNotes
+      tagRows
         ?.flatMap((row) => row.tags || [])
         .map((tag: string) => normalizeTag(tag)) || [],
     ),
   ).sort();
 
-  const notes =
-    selectedTags.length > 0
-      ? allNotes?.filter((note) =>
-          selectedTags.every((tag) =>
-            note.tags?.map((t: string) => normalizeTag(t)).includes(tag),
-          ),
-        )
-      : allNotes;
-
-  const notesCount = allNotes?.length || 0;
-  const filteredCount = notes?.length || 0;
+  const notesCount = tagRows?.length || 0;
+  const totalFiltered = filteredCount ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
   const { notes: notesLimit } = getTierConfig(profile?.tier);
   const hasNoteLimit = Number.isFinite(notesLimit);
   const isAtLimit = hasNoteLimit && notesCount >= notesLimit;
   const notesUsageLabel = hasNoteLimit
     ? `${notesCount.toLocaleString()} of ${notesLimit.toLocaleString()} memories used`
     : `${notesCount.toLocaleString()} memories stored`;
+
+  // Build pagination href preserving existing query params
+  function pageHref(p: number) {
+    const params = new URLSearchParams();
+    if (selectedTags.length > 0) params.set("tag", selectedTags.join(","));
+    if (p > 1) params.set("page", String(p));
+    const qs = params.toString();
+    return `/dashboard/notes${qs ? `?${qs}` : ""}`;
+  }
 
   return (
     <div className="max-w-6xl mx-auto p-8">
@@ -82,7 +100,7 @@ export default async function NotesLibraryPage({
           <p className="text-muted mt-1">{notesUsageLabel}</p>
           {selectedTags.length > 0 && (
             <p className="text-xs text-muted mt-1">
-              Showing {filteredCount.toLocaleString()} matching notes.
+              Showing {totalFiltered.toLocaleString()} matching notes.
             </p>
           )}
           {isAtLimit && (
@@ -172,6 +190,39 @@ export default async function NotesLibraryPage({
           </div>
         )}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 mt-10">
+          {page > 1 ? (
+            <Link
+              href={pageHref(page - 1)}
+              className="flex items-center gap-1 px-3 py-2 text-sm rounded-lg bg-surface border border-border hover:border-emerald-500/30 transition"
+            >
+              <ChevronLeft size={16} /> Previous
+            </Link>
+          ) : (
+            <span className="flex items-center gap-1 px-3 py-2 text-sm rounded-lg bg-surface border border-border text-muted cursor-not-allowed opacity-50">
+              <ChevronLeft size={16} /> Previous
+            </span>
+          )}
+          <span className="text-sm text-muted px-2">
+            Page {page} of {totalPages}
+          </span>
+          {page < totalPages ? (
+            <Link
+              href={pageHref(page + 1)}
+              className="flex items-center gap-1 px-3 py-2 text-sm rounded-lg bg-surface border border-border hover:border-emerald-500/30 transition"
+            >
+              Next <ChevronRight size={16} />
+            </Link>
+          ) : (
+            <span className="flex items-center gap-1 px-3 py-2 text-sm rounded-lg bg-surface border border-border text-muted cursor-not-allowed opacity-50">
+              Next <ChevronRight size={16} />
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
