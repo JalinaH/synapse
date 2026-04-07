@@ -761,14 +761,27 @@ export async function exportNotes() {
 
   if (!user) return { error: "Unauthorized" };
 
-  const { data, error } = await supabase
-    .from("notes")
-    .select("id, content, created_at, tags")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false });
+  const BATCH_SIZE = 500;
+  const allNotes: Record<string, unknown>[] = [];
+  let from = 0;
 
-  if (error) return { error: error.message };
-  return { notes: data || [] };
+  while (true) {
+    const { data, error } = await supabase
+      .from("notes")
+      .select("id, content, created_at, tags")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .range(from, from + BATCH_SIZE - 1);
+
+    if (error) return { error: error.message };
+    if (!data || data.length === 0) break;
+
+    allNotes.push(...data);
+    if (data.length < BATCH_SIZE) break;
+    from += BATCH_SIZE;
+  }
+
+  return { notes: allNotes };
 }
 
 // 7. Import Notes
