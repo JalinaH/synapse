@@ -231,9 +231,14 @@ export default function ChatPage() {
 
   useEffect(() => {
     const loadedThreads = loadThreadsFromStorage();
-    const storedActiveThreadId = window.localStorage.getItem(
-      ACTIVE_THREAD_STORAGE_KEY,
-    );
+    let storedActiveThreadId: string | null = null;
+    try {
+      storedActiveThreadId = window.localStorage.getItem(
+        ACTIVE_THREAD_STORAGE_KEY,
+      );
+    } catch {
+      // localStorage may be unavailable (private browsing, storage disabled)
+    }
 
     if (loadedThreads.length === 0) {
       const firstThread = createThread();
@@ -255,11 +260,15 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!isHydrated) return;
-    window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(threads));
-    if (activeThreadId) {
-      window.localStorage.setItem(ACTIVE_THREAD_STORAGE_KEY, activeThreadId);
-    } else {
-      window.localStorage.removeItem(ACTIVE_THREAD_STORAGE_KEY);
+    try {
+      window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(threads));
+      if (activeThreadId) {
+        window.localStorage.setItem(ACTIVE_THREAD_STORAGE_KEY, activeThreadId);
+      } else {
+        window.localStorage.removeItem(ACTIVE_THREAD_STORAGE_KEY);
+      }
+    } catch {
+      // localStorage may be full or unavailable
     }
   }, [threads, activeThreadId, isHydrated]);
 
